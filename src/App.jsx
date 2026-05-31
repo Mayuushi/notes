@@ -62,6 +62,7 @@ async function readErrorMessage(response, fallbackMessage) {
 }
 
 export default function App() {
+  const [activeScreen, setActiveScreen] = useState('notes');
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
@@ -80,6 +81,14 @@ export default function App() {
   const [aiTag, setAiTag] = useState('');
   const [generating, setGenerating] = useState(false);
   const [generatorError, setGeneratorError] = useState('');
+  const [examTag, setExamTag] = useState('');
+  const [examLoading, setExamLoading] = useState(false);
+  const [examError, setExamError] = useState('');
+  const [examList, setExamList] = useState([]);
+  const [examListLoading, setExamListLoading] = useState(false);
+  const [selectedExamId, setSelectedExamId] = useState(null);
+  const [examAnswers, setExamAnswers] = useState({});
+  const [examResult, setExamResult] = useState(null);
 
   const visibleNotes = useMemo(
     () => getVisibleNotes(notes, showUniqueTitles, sortOrder),
@@ -100,6 +109,10 @@ export default function App() {
   const selectedNote = useMemo(
     () => visibleNotes.find((note) => note.id === selectedId) || null,
     [visibleNotes, selectedId],
+  );
+  const selectedExam = useMemo(
+    () => examList.find((exam) => exam.id === selectedExamId) || null,
+    [examList, selectedExamId],
   );
 
   useEffect(() => {
@@ -148,6 +161,14 @@ export default function App() {
     }
   }, [visibleNotes, selectedId, session]);
 
+  useEffect(() => {
+    if (!session || activeScreen !== 'exam') {
+      return;
+    }
+
+    loadMockExams();
+  }, [activeScreen, session]);
+
   async function loadSession() {
     setAuthLoading(true);
 
@@ -192,6 +213,34 @@ export default function App() {
       setError(requestError.message || 'Unable to load notes.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadMockExams() {
+    setExamListLoading(true);
+    setExamError('');
+
+    try {
+      const response = await fetch('/api/mock-exams', { credentials: 'include' });
+
+      if (response.status === 401) {
+        setSession(null);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, 'Unable to load saved exams.'));
+      }
+
+      const data = await response.json();
+      const exams = data.exams || [];
+
+      setExamList(exams);
+      setSelectedExamId((currentExamId) => currentExamId || exams[0]?.id || null);
+    } catch (requestError) {
+      setExamError(requestError.message || 'Unable to load saved exams.');
+    } finally {
+      setExamListLoading(false);
     }
   }
 
@@ -299,6 +348,115 @@ export default function App() {
       setGeneratorError(requestError.message || 'Unable to generate notes.');
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function generateMockExam(event) {
+    event.preventDefault();
+
+    const tag = examTag.trim();
+
+    if (!tag) {
+      setExamError('Enter a tag to generate a mock exam.');
+      return;
+    }
+
+    setExamLoading(true);
+    setExamError('');
+    setExamResult(null);
+
+    try {
+      const response = await fetch('/api/ai/mock-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ tag }),
+      });
+
+      if (response.status === 401) {
+        setSession(null);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, 'Unable to generate mock exam.'));
+      }
+
+      const data = await response.json();
+      const nextExam = data.exam || null;
+
+      if (!nextExam) {
+        throw new Error('Unable to read generated exam.');
+      }
+
+      setExamList((currentExams) => {
+        const deduped = currentExams.filter((exam) => exam.id !== nextExam.id);
+        return [nextExam, ...deduped];
+      });
+      setSelectedExamId(nextExam.id);
+      setExamAnswers({});
+    } catch (requestError) {
+      setExamError(requestError.message || 'Unable to generate mock exam.');
+    } finally {
+      setExamLoading(false);
+    }
+  }
+
+  function selectExam(examId) {
+    setSelectedExamId(examId);
+    setExamAnswers({});
+    setExamResult(null);
+    setExamError('');
+  }
+
+  function selectExamAnswer(questionId, answerIndex) {
+    setExamAnswers((currentAnswers) => ({
+      ...currentAnswers,
+      [questionId]: answerIndex,
+    }));
+  }
+
+  async function submitExamAttempt(event) {
+    event.preventDefault();
+
+    if (!selectedExam) {
+      setExamError('Select an exam before submitting.');
+      return;
+    }
+
+    setExamLoading(true);
+    setExamError('');
+
+    try {
+      const response = await fetch('/api/mock-exams/attempt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          examId: selectedExam.id,
+          answers: examAnswers,
+        }),
+      });
+
+      if (response.status === 401) {
+        setSession(null);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, 'Unable to submit exam attempt.'));
+      }
+
+      const data = await response.json();
+      setExamResult(data);
+    } catch (requestError) {
+      setExamError(requestError.message || 'Unable to submit exam attempt.');
+    } finally {
+      setExamLoading(false);
     }
   }
 
@@ -432,6 +590,23 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar-shell">
+        <section className="sidebar-section sidebar-navigation">
+          <button
+            className={`sidebar-link ${activeScreen === 'notes' ? 'is-active' : ''}`}
+            type="button"
+            onClick={() => setActiveScreen('notes')}
+          >
+            Notes Workspace
+          </button>
+          <button
+            className={`sidebar-link ${activeScreen === 'exam' ? 'is-active' : ''}`}
+            type="button"
+            onClick={() => setActiveScreen('exam')}
+          >
+            Mock Exam Builder
+          </button>
+        </section>
+
         <section className="sidebar-section sidebar-history">
           <label className="sidebar-search">
             <span>Search notes</span>
@@ -486,20 +661,51 @@ export default function App() {
 
       <main className="app-frame">
         <section className="workspace">
-          <section className="editor-panel">
-            <form className="ai-generator" onSubmit={generateNotesFromTopic}>
-              <div className="ai-generator-heading">
-                <h2>Generate notes with Groq</h2>
-                <p>Enter a topic and let the AI break it into focused study notes.</p>
-              </div>
+          {activeScreen === 'notes' ? (
+            <section className="editor-panel">
+              <form className="ai-generator" onSubmit={generateNotesFromTopic}>
+                <div className="ai-generator-heading">
+                  <h2>Generate notes with Groq</h2>
+                  <p>Enter a topic and let the AI break it into focused study notes.</p>
+                </div>
 
-              <div className="ai-generator-grid">
+                <div className="ai-generator-grid">
+                  <label>
+                    <span>Topic</span>
+                    <input
+                      value={aiTopic}
+                      onChange={(event) => setAiTopic(event.target.value)}
+                      placeholder="Example: OOP"
+                      maxLength={120}
+                    />
+                  </label>
+
+                  <label>
+                    <span>Tag</span>
+                    <input
+                      value={aiTag}
+                      onChange={(event) => setAiTag(event.target.value)}
+                      placeholder="Example: programming"
+                      maxLength={40}
+                    />
+                  </label>
+                </div>
+
+                <div className="ai-generator-footer">
+                  <p className="status-text">{generatorError || 'Creates separate notes for the main subtopics.'}</p>
+                  <button className="primary-button" type="submit" disabled={generating}>
+                    {generating ? 'Generating...' : 'Generate notes'}
+                  </button>
+                </div>
+              </form>
+
+              <form className="editor-form" onSubmit={saveNote}>
                 <label>
-                  <span>Topic</span>
+                  <span>Title</span>
                   <input
-                    value={aiTopic}
-                    onChange={(event) => setAiTopic(event.target.value)}
-                    placeholder="Example: OOP"
+                    value={form.title}
+                    onChange={(event) => setForm((currentForm) => ({ ...currentForm, title: event.target.value }))}
+                    placeholder="Example: Weekly project plan"
                     maxLength={120}
                   />
                 </label>
@@ -507,64 +713,159 @@ export default function App() {
                 <label>
                   <span>Tag</span>
                   <input
-                    value={aiTag}
-                    onChange={(event) => setAiTag(event.target.value)}
+                    value={form.tag}
+                    onChange={(event) => setForm((currentForm) => ({ ...currentForm, tag: event.target.value }))}
+                    placeholder="Example: planning"
+                    maxLength={40}
+                  />
+                </label>
+
+                <label>
+                  <span>Content</span>
+                  <textarea
+                    value={form.content}
+                    onChange={(event) => setForm((currentForm) => ({ ...currentForm, content: event.target.value }))}
+                    placeholder="Capture the important details here..."
+                    rows={12}
+                    maxLength={5000}
+                  />
+                </label>
+
+                <div className="form-footer">
+                  <p className="status-text">{message || 'Save changes to this notebook.'}</p>
+                  <button className="primary-button" type="submit" disabled={saving}>
+                    {saving ? 'Saving...' : selectedNote ? 'Update note' : 'Save note'}
+                  </button>
+                </div>
+              </form>
+
+              {error ? <p className="error-text">{error}</p> : null}
+            </section>
+          ) : (
+            <section className="editor-panel exam-panel">
+              <form className="exam-generator" onSubmit={generateMockExam}>
+                <div className="ai-generator-heading">
+                  <h2>Generate mock exam with Groq</h2>
+                  <p>Enter a tag and Groq will build an exam based on matching notes.</p>
+                </div>
+
+                <label>
+                  <span>Tag</span>
+                  <input
+                    value={examTag}
+                    onChange={(event) => setExamTag(event.target.value)}
                     placeholder="Example: programming"
                     maxLength={40}
                   />
                 </label>
-              </div>
 
-              <div className="ai-generator-footer">
-                <p className="status-text">{generatorError || 'Creates separate notes for the main subtopics.'}</p>
-                <button className="primary-button" type="submit" disabled={generating}>
-                  {generating ? 'Generating...' : 'Generate notes'}
-                </button>
-              </div>
-            </form>
+                <div className="ai-generator-footer">
+                  <p className="status-text">{examError || 'Uses all notes that share the tag to build one exam.'}</p>
+                  <button className="primary-button" type="submit" disabled={examLoading}>
+                    {examLoading ? 'Generating...' : 'Generate mock exam'}
+                  </button>
+                </div>
+              </form>
 
-            <form className="editor-form" onSubmit={saveNote}>
-              <label>
-                <span>Title</span>
-                <input
-                  value={form.title}
-                  onChange={(event) => setForm((currentForm) => ({ ...currentForm, title: event.target.value }))}
-                  placeholder="Example: Weekly project plan"
-                  maxLength={120}
-                />
-              </label>
+              <section className="exam-lms-layout">
+                <aside className="exam-list-card">
+                  <h3>Saved mock exams</h3>
+                  {examListLoading ? (
+                    <p className="status-text">Loading exams...</p>
+                  ) : examList.length === 0 ? (
+                    <p className="status-text">No saved mock exams yet.</p>
+                  ) : (
+                    <div className="exam-list">
+                      {examList.map((exam) => (
+                        <button
+                          key={exam.id}
+                          type="button"
+                          className={`exam-list-item ${exam.id === selectedExamId ? 'is-active' : ''}`}
+                          onClick={() => selectExam(exam.id)}
+                        >
+                          <strong>{exam.title}</strong>
+                          <span>#{exam.tag}</span>
+                          <span>{exam.questionCount} questions</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </aside>
 
-              <label>
-                <span>Tag</span>
-                <input
-                  value={form.tag}
-                  onChange={(event) => setForm((currentForm) => ({ ...currentForm, tag: event.target.value }))}
-                  placeholder="Example: planning"
-                  maxLength={40}
-                />
-              </label>
+                <section className="exam-player-card">
+                  {selectedExam ? (
+                    <form className="exam-player" onSubmit={submitExamAttempt}>
+                      <div className="exam-player-header">
+                        <h3>{selectedExam.title}</h3>
+                        <p className="status-text">
+                          #{selectedExam.tag} • {selectedExam.questionCount} questions • {selectedExam.timeLimitMinutes} min suggested time
+                        </p>
+                        <p className="status-text">{selectedExam.instructions}</p>
+                      </div>
 
-              <label>
-                <span>Content</span>
-                <textarea
-                  value={form.content}
-                  onChange={(event) => setForm((currentForm) => ({ ...currentForm, content: event.target.value }))}
-                  placeholder="Capture the important details here..."
-                  rows={12}
-                  maxLength={5000}
-                />
-              </label>
+                      <div className="exam-questions">
+                        {(selectedExam.questions || []).map((question, questionIndex) => (
+                          <fieldset key={question.id} className="exam-question">
+                            <legend>
+                              {questionIndex + 1}. {question.prompt}
+                            </legend>
+                            <div className="exam-options">
+                              {(question.options || []).map((option, optionIndex) => (
+                                <label key={`${question.id}-${optionIndex}`} className="exam-option">
+                                  <input
+                                    type="radio"
+                                    name={question.id}
+                                    checked={examAnswers[question.id] === optionIndex}
+                                    onChange={() => selectExamAnswer(question.id, optionIndex)}
+                                  />
+                                  <span>{option}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </fieldset>
+                        ))}
+                      </div>
 
-              <div className="form-footer">
-                <p className="status-text">{message || 'Save changes to this notebook.'}</p>
-                <button className="primary-button" type="submit" disabled={saving}>
-                  {saving ? 'Saving...' : selectedNote ? 'Update note' : 'Save note'}
-                </button>
-              </div>
-            </form>
+                      <div className="ai-generator-footer">
+                        <p className="status-text">
+                          {examResult ? `Score: ${examResult.score}/${examResult.total} (${examResult.percentage}%)` : 'Answer all questions, then submit your attempt.'}
+                        </p>
+                        <button className="primary-button" type="submit" disabled={examLoading}>
+                          {examLoading ? 'Submitting...' : 'Submit attempt'}
+                        </button>
+                      </div>
 
-            {error ? <p className="error-text">{error}</p> : null}
-          </section>
+                      {examResult ? (
+                        <section className="exam-result">
+                          <h4>Result breakdown</h4>
+                          <p className="status-text">
+                            Answered {examResult.answeredCount} of {examResult.total} • Attempt saved
+                          </p>
+                          <div className="exam-breakdown">
+                            {(examResult.breakdown || []).map((item, itemIndex) => (
+                              <article key={item.questionId} className={`exam-breakdown-item ${item.isCorrect ? 'is-correct' : 'is-wrong'}`}>
+                                <strong>
+                                  {itemIndex + 1}. {item.isCorrect ? 'Correct' : 'Incorrect'}
+                                </strong>
+                                {!item.isCorrect ? (
+                                  <span>
+                                    Correct option: {(selectedExam.questions.find((question) => question.id === item.questionId)?.options || [])[item.correctIndex] || 'N/A'}
+                                  </span>
+                                ) : null}
+                                {item.explanation ? <span>{item.explanation}</span> : null}
+                              </article>
+                            ))}
+                          </div>
+                        </section>
+                      ) : null}
+                    </form>
+                  ) : (
+                    <p className="status-text">Generate or select a mock exam to begin.</p>
+                  )}
+                </section>
+              </section>
+            </section>
+          )}
         </section>
       </main>
     </div>
