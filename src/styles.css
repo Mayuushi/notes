@@ -213,6 +213,40 @@ button {
   transition: background 140ms ease, border-color 140ms ease;
 }
 
+.sidebar-note-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.sidebar-note-check {
+  width: 16px;
+  height: 16px;
+  margin-top: 14px;
+  accent-color: #d9dde3;
+  justify-self: center;
+}
+
+.sidebar-note-check-spacer {
+  width: 16px;
+  height: 16px;
+  margin-top: 14px;
+}
+
+.sidebar-note-delete {
+  align-self: center;
+  min-width: 36px;
+  height: 36px;
+  padding-inline: 10px;
+  display: none;
+}
+
+.sidebar-note-row:hover .sidebar-note-delete,
+.sidebar-note-row:focus-within .sidebar-note-delete {
+  display: inline-flex;
+}
+
 .sidebar-note strong,
 .sidebar-note span {
   display: block;
@@ -338,6 +372,36 @@ button {
   gap: 16px;
 }
 
+.bulk-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.sidebar-bulk-actions {
+  margin-top: 4px;
+  margin-bottom: 0;
+}
+
+.sidebar-bulk-actions .ghost-button,
+.sidebar-bulk-actions .danger-button {
+  min-width: 0;
+}
+
+.sidebar-bulk-actions .ghost-button span,
+.sidebar-bulk-actions .danger-button span,
+.sidebar-note-delete span {
+  display: inline-block;
+  transform: translateY(1px);
+}
+
+.notes-selection-hint {
+  margin: 0 0 12px;
+  color: rgba(231, 232, 235, 0.62);
+  line-height: 1.5;
+}
+
 .workspace-header {
   display: grid;
   gap: 0;
@@ -419,6 +483,13 @@ button {
   margin-top: 12px;
 }
 
+.exam-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
 .exam-list-item {
   width: 100%;
   text-align: left;
@@ -444,6 +515,18 @@ button {
 .exam-list-item:hover {
   border-color: rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.06);
+}
+
+.exam-list-delete {
+  align-self: center;
+  min-width: 36px;
+  height: 36px;
+  display: none;
+}
+
+.exam-list-row:hover .exam-list-delete,
+.exam-list-row:focus-within .exam-list-delete {
+  display: inline-flex;
 }
 
 .exam-player {
@@ -797,6 +880,10 @@ textarea {
 
   .ai-generator-grid {
     grid-template-columns: 1fr;
+  }
+
+  .bulk-actions {
+    flex-direction: column;
   }
 
   .exam-option {

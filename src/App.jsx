@@ -69,6 +69,8 @@ export default function App() {
   const [credentials, setCredentials] = useState(emptyCredentials);
   const [notes, setNotes] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [selectedNoteIds, setSelectedNoteIds] = useState([]);
+  const [bulkDeleteMode, setBulkDeleteMode] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -110,6 +112,10 @@ export default function App() {
     () => visibleNotes.find((note) => note.id === selectedId) || null,
     [visibleNotes, selectedId],
   );
+  const selectedDeletableNotes = useMemo(
+    () => notes.filter((note) => selectedNoteIds.includes(note.id)),
+    [notes, selectedNoteIds],
+  );
   const selectedExam = useMemo(
     () => examList.find((exam) => exam.id === selectedExamId) || null,
     [examList, selectedExamId],
@@ -123,6 +129,8 @@ export default function App() {
     if (!session) {
       setNotes([]);
       setSelectedId(null);
+      setSelectedNoteIds([]);
+      setBulkDeleteMode(false);
       setForm(emptyForm);
       return;
     }
@@ -160,6 +168,16 @@ export default function App() {
       setSelectedId(visibleNotes[0].id);
     }
   }, [visibleNotes, selectedId, session]);
+
+  useEffect(() => {
+    setSelectedNoteIds((currentIds) => currentIds.filter((noteId) => notes.some((note) => note.id === noteId)));
+  }, [notes]);
+
+  useEffect(() => {
+    if (!bulkDeleteMode) {
+      setSelectedNoteIds([]);
+    }
+  }, [bulkDeleteMode]);
 
   useEffect(() => {
     if (!session || activeScreen !== 'exam') {
@@ -292,6 +310,7 @@ export default function App() {
         return nextNotes.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
       });
       setSelectedId(savedNote.id);
+      setSelectedNoteIds((currentIds) => (currentIds.includes(savedNote.id) ? currentIds : currentIds));
       setMessage(selectedNote ? 'Notebook entry updated.' : 'Notebook entry created.');
     } catch (requestError) {
       setError(requestError.message || 'Unable to save note.');
@@ -460,6 +479,52 @@ export default function App() {
     }
   }
 
+  async function deleteMockExam(examId) {
+    const examToDelete = examList.find((exam) => exam.id === examId);
+
+    if (!examToDelete) {
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete "${examToDelete.title}"?`);
+    if (!confirmed) return;
+
+    setExamLoading(true);
+    setExamError('');
+
+    try {
+      const response = await fetch(`/api/mock-exams/${examId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (response.status === 401) {
+        setSession(null);
+        return;
+      }
+
+      if (!response.ok && response.status !== 204) {
+        throw new Error(await readErrorMessage(response, 'Unable to delete mock exam.'));
+      }
+
+      setExamList((currentExams) => currentExams.filter((exam) => exam.id !== examId));
+      setExamAnswers({});
+      setExamResult(null);
+      setSelectedExamId((currentSelectedExamId) => {
+        if (currentSelectedExamId !== examId) {
+          return currentSelectedExamId;
+        }
+
+        const remainingExams = examList.filter((exam) => exam.id !== examId);
+        return remainingExams[0]?.id || null;
+      });
+    } catch (requestError) {
+      setExamError(requestError.message || 'Unable to delete mock exam.');
+    } finally {
+      setExamLoading(false);
+    }
+  }
+
   async function deleteNote(noteId) {
     const noteToDelete = notes.find((note) => note.id === noteId);
     if (!noteToDelete) return;
@@ -484,6 +549,7 @@ export default function App() {
       }
 
       setNotes((currentNotes) => currentNotes.filter((note) => note.id !== noteId));
+      setSelectedNoteIds((currentIds) => currentIds.filter((currentId) => currentId !== noteId));
       setSelectedId((currentSelectedId) => {
         if (currentSelectedId !== noteId) return currentSelectedId;
 
@@ -504,6 +570,76 @@ export default function App() {
     setForm(emptyForm);
     setError('');
     setMessage('');
+  }
+
+  function toggleBulkDeleteMode() {
+    setBulkDeleteMode((currentMode) => !currentMode);
+  }
+
+  function toggleNoteSelection(noteId) {
+    setSelectedNoteIds((currentIds) => (
+      currentIds.includes(noteId)
+        ? currentIds.filter((currentId) => currentId !== noteId)
+        : [...currentIds, noteId]
+    ));
+  }
+
+  async function deleteSelectedNotes() {
+    if (selectedDeletableNotes.length === 0) {
+      setError('Select one or more notes first.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete ${selectedDeletableNotes.length} selected note(s)?`);
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    try {
+      await Promise.all(selectedDeletableNotes.map((note) => fetch(`/api/notebooks/${note.id}`, { method: 'DELETE', credentials: 'include' })));
+      const deletedIds = new Set(selectedDeletableNotes.map((note) => note.id));
+      const remainingNotes = notes.filter((note) => !deletedIds.has(note.id));
+      const remainingVisibleNotes = getVisibleNotes(remainingNotes, showUniqueTitles, sortOrder);
+
+      setNotes(remainingNotes);
+      setSelectedNoteIds([]);
+      setSelectedId((currentSelectedId) => (deletedIds.has(currentSelectedId) ? remainingVisibleNotes[0]?.id || null : currentSelectedId));
+      setForm(emptyForm);
+      setMessage(`${deletedIds.size} note(s) deleted.`);
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to delete selected notes.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteAllNotes() {
+    if (notes.length === 0) {
+      setError('No notes to delete.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete all ${notes.length} notes?`);
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    try {
+      await Promise.all(notes.map((note) => fetch(`/api/notebooks/${note.id}`, { method: 'DELETE', credentials: 'include' })));
+      setNotes([]);
+      setSelectedNoteIds([]);
+      setSelectedId(null);
+      setForm(emptyForm);
+      setMessage('All notes deleted.');
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to delete all notes.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function login(event) {
@@ -626,6 +762,26 @@ export default function App() {
             + New note
           </button>
 
+          <div className="bulk-actions sidebar-bulk-actions">
+            {bulkDeleteMode ? (
+              <>
+                <button className="ghost-button" type="button" onClick={deleteSelectedNotes} disabled={saving || selectedDeletableNotes.length === 0}>
+                  <span aria-hidden="true">🗑</span> Selected ({selectedDeletableNotes.length})
+                </button>
+                <button className="ghost-button" type="button" onClick={toggleBulkDeleteMode}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button className="ghost-button" type="button" onClick={toggleBulkDeleteMode}>
+                <span aria-hidden="true">🗑</span> Multiple
+              </button>
+            )}
+            <button className="danger-button" type="button" onClick={deleteAllNotes} disabled={saving || notes.length === 0}>
+              <span aria-hidden="true">🗑</span> All
+            </button>
+          </div>
+
           {loading ? (
             <div className="sidebar-empty">Loading notes...</div>
           ) : searchedNotes.length === 0 ? (
@@ -636,19 +792,42 @@ export default function App() {
           ) : (
             <div className="sidebar-note-list">
               {searchedNotes.map((note) => (
-                <button
-                  key={note.id}
-                  type="button"
-                  className={`sidebar-note ${note.id === selectedId ? 'is-active' : ''}`}
+                <label key={note.id} className={`sidebar-note-row ${note.id === selectedId ? 'is-active' : ''}`}>
+                  {bulkDeleteMode ? (
+                    <input
+                      className="sidebar-note-check"
+                      type="checkbox"
+                      checked={selectedNoteIds.includes(note.id)}
+                      onChange={() => toggleNoteSelection(note.id)}
+                    />
+                  ) : (
+                    <span className="sidebar-note-check-spacer" aria-hidden="true" />
+                  )}
+                  <button
+                    type="button"
+                    className={`sidebar-note ${note.id === selectedId ? 'is-active' : ''}`}
                     onClick={() => setSelectedId(note.id)}
-                >
+                  >
                     <strong>{note.title}</strong>
                     {note.tag ? <span className="note-tag">#{note.tag}</span> : null}
                     <span>{formatDate(note.updatedAt)}</span>
-                </button>
+                  </button>
+                  <button
+                    className="ghost-button sidebar-note-delete"
+                    type="button"
+                    onClick={() => deleteNote(note.id)}
+                    aria-label={`Delete ${note.title}`}
+                  >
+                    <span aria-hidden="true">🗑</span>
+                  </button>
+                </label>
               ))}
             </div>
           )}
+
+          <p className="notes-selection-hint">
+            {bulkDeleteMode ? 'Select notes with the checkboxes, then delete the selected items.' : 'Hover a note to reveal delete, or use Delete multiple to select several notes.'}
+          </p>
         </section>
 
         <section className="sidebar-section sidebar-footer">
@@ -699,7 +878,7 @@ export default function App() {
                 </div>
               </form>
 
-              <form className="editor-form" onSubmit={saveNote}>
+                <form className="editor-form" onSubmit={saveNote}>
                 <label>
                   <span>Title</span>
                   <input
@@ -777,16 +956,25 @@ export default function App() {
                   ) : (
                     <div className="exam-list">
                       {examList.map((exam) => (
-                        <button
-                          key={exam.id}
-                          type="button"
-                          className={`exam-list-item ${exam.id === selectedExamId ? 'is-active' : ''}`}
-                          onClick={() => selectExam(exam.id)}
-                        >
-                          <strong>{exam.title}</strong>
-                          <span>#{exam.tag}</span>
-                          <span>{exam.questionCount} questions</span>
-                        </button>
+                        <div key={exam.id} className="exam-list-row">
+                          <button
+                            type="button"
+                            className={`exam-list-item ${exam.id === selectedExamId ? 'is-active' : ''}`}
+                            onClick={() => selectExam(exam.id)}
+                          >
+                            <strong>{exam.title}</strong>
+                            <span>#{exam.tag}</span>
+                            <span>{exam.questionCount} questions</span>
+                          </button>
+                          <button
+                            className="ghost-button exam-list-delete"
+                            type="button"
+                            onClick={() => deleteMockExam(exam.id)}
+                            aria-label={`Delete ${exam.title}`}
+                          >
+                            <span aria-hidden="true">🗑</span>
+                          </button>
+                        </div>
                       ))}
                     </div>
                   )}
