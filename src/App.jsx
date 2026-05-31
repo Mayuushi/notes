@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 
-const emptyForm = { title: '', content: '' };
+const emptyForm = { title: '', content: '', tag: '' };
 const emptyCredentials = { username: '', password: '' };
+const newNoteId = '__new__';
 
 function formatDate(value) {
   if (!value) return 'Just now';
@@ -9,6 +10,37 @@ function formatDate(value) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+}
+
+function compareByUpdatedAt(noteA, noteB, sortOrder) {
+  const dateA = new Date(noteA.updatedAt).getTime();
+  const dateB = new Date(noteB.updatedAt).getTime();
+
+  return sortOrder === 'oldest' ? dateA - dateB : dateB - dateA;
+}
+
+function getVisibleNotes(notes, showUniqueTitles, sortOrder) {
+  const sortedNotes = [...notes].sort((noteA, noteB) => compareByUpdatedAt(noteA, noteB, sortOrder));
+
+  if (!showUniqueTitles) {
+    return sortedNotes;
+  }
+
+  const seenTitles = new Set();
+  const visibleNotes = [];
+
+  for (const note of sortedNotes) {
+    const titleKey = note.title.trim().toLowerCase();
+
+    if (seenTitles.has(titleKey)) {
+      continue;
+    }
+
+    seenTitles.add(titleKey);
+    visibleNotes.push(note);
+  }
+
+  return visibleNotes;
 }
 
 async function readErrorMessage(response, fallbackMessage) {
@@ -41,10 +73,29 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [sortOrder, setSortOrder] = useState('newest');
+  const [showUniqueTitles, setShowUniqueTitles] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
+  const visibleNotes = useMemo(
+    () => getVisibleNotes(notes, showUniqueTitles, sortOrder),
+    [notes, showUniqueTitles, sortOrder],
+  );
+  const searchedNotes = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    if (!query) {
+      return visibleNotes;
+    }
+
+    return visibleNotes.filter((note) => {
+      const haystack = `${note.title} ${note.content} ${note.tag || ''}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [searchQuery, visibleNotes]);
   const selectedNote = useMemo(
-    () => notes.find((note) => note.id === selectedId) || null,
-    [notes, selectedId],
+    () => visibleNotes.find((note) => note.id === selectedId) || null,
+    [visibleNotes, selectedId],
   );
 
   useEffect(() => {
@@ -68,11 +119,30 @@ export default function App() {
     }
 
     if (selectedNote) {
-      setForm({ title: selectedNote.title, content: selectedNote.content });
+      setForm({ title: selectedNote.title, content: selectedNote.content, tag: selectedNote.tag || '' });
     } else {
       setForm(emptyForm);
     }
   }, [selectedNote, session]);
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+
+    if (visibleNotes.length === 0) {
+      setSelectedId(null);
+      return;
+    }
+
+    if (selectedId === newNoteId) {
+      return;
+    }
+
+    if (!visibleNotes.some((note) => note.id === selectedId)) {
+      setSelectedId(visibleNotes[0].id);
+    }
+  }, [visibleNotes, selectedId, session]);
 
   async function loadSession() {
     setAuthLoading(true);
@@ -109,8 +179,11 @@ export default function App() {
       }
 
       const data = await response.json();
-      setNotes(data.notes || []);
-      setSelectedId((currentSelectedId) => currentSelectedId || data.notes?.[0]?.id || null);
+      const nextNotes = data.notes || [];
+      const nextVisibleNotes = getVisibleNotes(nextNotes, showUniqueTitles, sortOrder);
+
+      setNotes(nextNotes);
+      setSelectedId((currentSelectedId) => currentSelectedId || nextVisibleNotes[0]?.id || null);
     } catch (requestError) {
       setError(requestError.message || 'Unable to load notes.');
     } finally {
@@ -127,6 +200,7 @@ export default function App() {
     const payload = {
       title: form.title.trim(),
       content: form.content.trim(),
+      tag: form.tag.trim(),
     };
 
     if (!payload.title || !payload.content) {
@@ -199,8 +273,10 @@ export default function App() {
       setNotes((currentNotes) => currentNotes.filter((note) => note.id !== noteId));
       setSelectedId((currentSelectedId) => {
         if (currentSelectedId !== noteId) return currentSelectedId;
-        const remaining = notes.filter((note) => note.id !== noteId);
-        return remaining[0]?.id || null;
+
+        const remainingNotes = notes.filter((note) => note.id !== noteId);
+        const remainingVisibleNotes = getVisibleNotes(remainingNotes, showUniqueTitles, sortOrder);
+        return remainingVisibleNotes[0]?.id || null;
       });
       setMessage('Notebook entry deleted.');
     } catch (requestError) {
@@ -211,7 +287,7 @@ export default function App() {
   }
 
   function startNewNote() {
-    setSelectedId(null);
+    setSelectedId(newNoteId);
     setForm(emptyForm);
     setError('');
     setMessage('');
@@ -300,57 +376,62 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <main className="app-frame">
-        <button className="floating-signout ghost-button" type="button" onClick={logout}>
-          Sign out
-        </button>
+      <aside className="sidebar-shell">
+        <section className="sidebar-section sidebar-history">
+          <label className="sidebar-search">
+            <span>Search notes</span>
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search titles and content"
+            />
+          </label>
 
-        <section className="workspace">
-          <aside className="notes-panel">
-            <div className="panel-header">
-              <h2>Your notes</h2>
-              <button className="ghost-button" onClick={startNewNote} type="button">
-                New note
-              </button>
+          <div className="sidebar-section-header">
+            <h2>Notes</h2>
+            <span>{searchedNotes.length}</span>
+          </div>
+
+          <button className="sidebar-link sidebar-new-note" onClick={startNewNote} type="button">
+            + New note
+          </button>
+
+          {loading ? (
+            <div className="sidebar-empty">Loading notes...</div>
+          ) : searchedNotes.length === 0 ? (
+            <div className="sidebar-empty">
+              <strong>{searchQuery ? 'No matches found.' : 'No notes yet.'}</strong>
+              <span>{searchQuery ? 'Try a different search term.' : 'Create your first notebook entry in the editor.'}</span>
             </div>
-
-            {loading ? (
-              <div className="empty-state">Loading notes...</div>
-            ) : notes.length === 0 ? (
-              <div className="empty-state">
-                <strong>No notes yet.</strong>
-                <span>Create your first notebook entry on the right.</span>
-              </div>
-            ) : (
-              <div className="note-list">
-                {notes.map((note) => (
-                  <button
-                    key={note.id}
-                    type="button"
-                    className={`note-card ${note.id === selectedId ? 'is-active' : ''}`}
+          ) : (
+            <div className="sidebar-note-list">
+              {searchedNotes.map((note) => (
+                <button
+                  key={note.id}
+                  type="button"
+                  className={`sidebar-note ${note.id === selectedId ? 'is-active' : ''}`}
                     onClick={() => setSelectedId(note.id)}
-                  >
-                    <div>
-                      <h3>{note.title}</h3>
-                      <p>{note.content}</p>
-                    </div>
-                    <time>{formatDate(note.updatedAt)}</time>
-                  </button>
-                ))}
-              </div>
-            )}
-          </aside>
-
-          <section className="editor-panel">
-            <div className="panel-header">
-              <h2>{selectedNote ? 'Edit note' : 'New note'}</h2>
-              {selectedNote ? (
-                <button className="danger-button" type="button" onClick={() => deleteNote(selectedNote.id)}>
-                  Delete
+                >
+                    <strong>{note.title}</strong>
+                    {note.tag ? <span className="note-tag">#{note.tag}</span> : null}
+                    <span>{formatDate(note.updatedAt)}</span>
                 </button>
-              ) : null}
+              ))}
             </div>
+          )}
+        </section>
 
+        <section className="sidebar-section sidebar-footer">
+          <p>{session.username}</p>
+          <button className="ghost-button sidebar-signout" type="button" onClick={logout}>
+            Sign out
+          </button>
+        </section>
+      </aside>
+
+      <main className="app-frame">
+        <section className="workspace">
+          <section className="editor-panel">
             <form className="editor-form" onSubmit={saveNote}>
               <label>
                 <span>Title</span>
@@ -359,6 +440,16 @@ export default function App() {
                   onChange={(event) => setForm((currentForm) => ({ ...currentForm, title: event.target.value }))}
                   placeholder="Example: Weekly project plan"
                   maxLength={120}
+                />
+              </label>
+
+              <label>
+                <span>Tag</span>
+                <input
+                  value={form.tag}
+                  onChange={(event) => setForm((currentForm) => ({ ...currentForm, tag: event.target.value }))}
+                  placeholder="Example: planning"
+                  maxLength={40}
                 />
               </label>
 

@@ -6,6 +6,7 @@ function serializeNote(note) {
     id: note._id.toString(),
     title: note.title,
     content: note.content,
+    tag: note.tag || '',
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,
   };
@@ -32,6 +33,7 @@ export default async function handler(req, res) {
   if (req.method === 'POST') {
     const title = String(req.body?.title || '').trim();
     const content = String(req.body?.content || '').trim();
+    const tag = String(req.body?.tag || '').trim();
 
     if (!title || !content) {
       res.status(400).json({ error: 'Title and content are required.' });
@@ -42,6 +44,7 @@ export default async function handler(req, res) {
     const result = await collection.insertOne({
       title,
       content,
+      tag,
       createdAt: now,
       updatedAt: now,
     });
