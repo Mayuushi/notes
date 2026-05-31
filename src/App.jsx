@@ -76,6 +76,10 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState('newest');
   const [showUniqueTitles, setShowUniqueTitles] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [aiTopic, setAiTopic] = useState('OOP');
+  const [aiTag, setAiTag] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [generatorError, setGeneratorError] = useState('');
 
   const visibleNotes = useMemo(
     () => getVisibleNotes(notes, showUniqueTitles, sortOrder),
@@ -244,6 +248,57 @@ export default function App() {
       setError(requestError.message || 'Unable to save note.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function generateNotesFromTopic(event) {
+    event.preventDefault();
+
+    const topic = aiTopic.trim();
+    const tag = aiTag.trim();
+
+    if (!topic) {
+      setGeneratorError('Enter a topic to generate notes from.');
+      return;
+    }
+
+    setGenerating(true);
+    setGeneratorError('');
+    setError('');
+    setMessage('');
+
+    try {
+      const response = await fetch('/api/ai/generate-notes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ topic, tag }),
+      });
+
+      if (response.status === 401) {
+        setSession(null);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, 'Unable to generate notes.'));
+      }
+
+      const data = await response.json();
+      const generatedNotes = data.notes || [];
+
+      setNotes((currentNotes) => {
+        const nextNotes = [...generatedNotes, ...currentNotes];
+        return nextNotes.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+      });
+      setSelectedId(generatedNotes[0]?.id || null);
+      setMessage(`Generated ${generatedNotes.length} notes from ${topic}${tag ? ` under #${tag}` : ''}.`);
+    } catch (requestError) {
+      setGeneratorError(requestError.message || 'Unable to generate notes.');
+    } finally {
+      setGenerating(false);
     }
   }
 
@@ -432,6 +487,42 @@ export default function App() {
       <main className="app-frame">
         <section className="workspace">
           <section className="editor-panel">
+            <form className="ai-generator" onSubmit={generateNotesFromTopic}>
+              <div className="ai-generator-heading">
+                <h2>Generate notes with Groq</h2>
+                <p>Enter a topic and let the AI break it into focused study notes.</p>
+              </div>
+
+              <div className="ai-generator-grid">
+                <label>
+                  <span>Topic</span>
+                  <input
+                    value={aiTopic}
+                    onChange={(event) => setAiTopic(event.target.value)}
+                    placeholder="Example: OOP"
+                    maxLength={120}
+                  />
+                </label>
+
+                <label>
+                  <span>Tag</span>
+                  <input
+                    value={aiTag}
+                    onChange={(event) => setAiTag(event.target.value)}
+                    placeholder="Example: programming"
+                    maxLength={40}
+                  />
+                </label>
+              </div>
+
+              <div className="ai-generator-footer">
+                <p className="status-text">{generatorError || 'Creates separate notes for the main subtopics.'}</p>
+                <button className="primary-button" type="submit" disabled={generating}>
+                  {generating ? 'Generating...' : 'Generate notes'}
+                </button>
+              </div>
+            </form>
+
             <form className="editor-form" onSubmit={saveNote}>
               <label>
                 <span>Title</span>

@@ -292,6 +292,48 @@ button {
   padding: 22px;
 }
 
+.ai-generator {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+  margin-bottom: 18px;
+}
+
+.ai-generator-heading {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-generator-heading h2,
+.ai-generator-heading p {
+  margin: 0;
+}
+
+.ai-generator-heading h2 {
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.ai-generator-heading p {
+  color: rgba(231, 232, 235, 0.68);
+  line-height: 1.6;
+}
+
+.ai-generator-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.ai-generator-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .workspace-header {
   display: grid;
   gap: 0;
@@ -307,6 +349,11 @@ button {
 
 .editor-panel {
   min-height: auto;
+}
+
+.editor-form {
+  display: grid;
+  gap: 18px;
 }
 
 .panel-header {
@@ -564,6 +611,10 @@ textarea {
   .sidebar-section,
   .sidebar-footer {
     padding: 16px;
+  }
+
+  .ai-generator-grid {
+    grid-template-columns: 1fr;
   }
 }
 
