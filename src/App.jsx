@@ -538,6 +538,52 @@ export default function App() {
     }
   }
 
+  async function deleteMockExam(examId) {
+    const examToDelete = examList.find((exam) => exam.id === examId);
+    if (!examToDelete) {
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete mock exam "${examToDelete.title}"?`);
+    if (!confirmed) {
+      return;
+    }
+
+    setExamError('');
+
+    try {
+      const response = await fetch(`/api/mock-exams/${examId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (response.status === 401) {
+        setSession(null);
+        return;
+      }
+
+      if (!response.ok && response.status !== 204) {
+        throw new Error(await readErrorMessage(response, 'Unable to delete mock exam.'));
+      }
+
+      setExamList((currentExams) => currentExams.filter((exam) => exam.id !== examId));
+      setSelectedExamId((currentSelectedId) => {
+        if (currentSelectedId !== examId) {
+          return currentSelectedId;
+        }
+
+        const remainingExams = examList.filter((exam) => exam.id !== examId);
+        return remainingExams[0]?.id || null;
+      });
+      if (selectedExamId === examId) {
+        setExamAnswers({});
+        setExamResult(null);
+      }
+    } catch (requestError) {
+      setExamError(requestError.message || 'Unable to delete mock exam.');
+    }
+  }
+
   function selectExam(examId) {
     setSelectedExamId(examId);
     setExamAnswers({});
@@ -1105,6 +1151,14 @@ export default function App() {
                             <strong>{exam.title}</strong>
                             <span>#{exam.tag}</span>
                             <span>{exam.questionCount} questions</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button exam-list-delete"
+                            onClick={() => deleteMockExam(exam.id)}
+                            aria-label={`Delete ${exam.title}`}
+                          >
+                            Delete
                           </button>
                         </div>
                       ))}
