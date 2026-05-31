@@ -70,7 +70,7 @@ export default function App() {
   const [notes, setNotes] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [selectedNoteIds, setSelectedNoteIds] = useState([]);
-  const [bulkDeleteMode, setBulkDeleteMode] = useState(false);
+  const [archiveBulkDeleteMode, setArchiveBulkDeleteMode] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -79,6 +79,7 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState('newest');
   const [showUniqueTitles, setShowUniqueTitles] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [notesPopupMode, setNotesPopupMode] = useState(null);
   const [aiTopic, setAiTopic] = useState('OOP');
   const [aiTag, setAiTag] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -91,6 +92,7 @@ export default function App() {
   const [selectedExamId, setSelectedExamId] = useState(null);
   const [examAnswers, setExamAnswers] = useState({});
   const [examResult, setExamResult] = useState(null);
+  const [examGeneratorOpen, setExamGeneratorOpen] = useState(false);
 
   const visibleNotes = useMemo(
     () => getVisibleNotes(notes, showUniqueTitles, sortOrder),
@@ -112,7 +114,7 @@ export default function App() {
     () => visibleNotes.find((note) => note.id === selectedId) || null,
     [visibleNotes, selectedId],
   );
-  const selectedDeletableNotes = useMemo(
+  const selectedArchiveNotes = useMemo(
     () => notes.filter((note) => selectedNoteIds.includes(note.id)),
     [notes, selectedNoteIds],
   );
@@ -130,7 +132,7 @@ export default function App() {
       setNotes([]);
       setSelectedId(null);
       setSelectedNoteIds([]);
-      setBulkDeleteMode(false);
+      setArchiveBulkDeleteMode(false);
       setForm(emptyForm);
       return;
     }
@@ -170,22 +172,18 @@ export default function App() {
   }, [visibleNotes, selectedId, session]);
 
   useEffect(() => {
-    setSelectedNoteIds((currentIds) => currentIds.filter((noteId) => notes.some((note) => note.id === noteId)));
-  }, [notes]);
-
-  useEffect(() => {
-    if (!bulkDeleteMode) {
-      setSelectedNoteIds([]);
-    }
-  }, [bulkDeleteMode]);
-
-  useEffect(() => {
     if (!session || activeScreen !== 'exam') {
       return;
     }
 
     loadMockExams();
   }, [activeScreen, session]);
+
+  useEffect(() => {
+    if (!archiveBulkDeleteMode) {
+      setSelectedNoteIds([]);
+    }
+  }, [archiveBulkDeleteMode]);
 
   async function loadSession() {
     setAuthLoading(true);
@@ -262,6 +260,116 @@ export default function App() {
     }
   }
 
+  function toggleArchiveBulkDeleteMode() {
+    setArchiveBulkDeleteMode((currentMode) => !currentMode);
+  }
+
+  function toggleArchiveNoteSelection(noteId) {
+    setSelectedNoteIds((currentIds) => (
+      currentIds.includes(noteId)
+        ? currentIds.filter((currentId) => currentId !== noteId)
+        : [...currentIds, noteId]
+    ));
+  }
+
+  async function deleteArchiveNote(noteId) {
+    const noteToDelete = notes.find((note) => note.id === noteId);
+    if (!noteToDelete) return;
+
+    const confirmed = window.confirm(`Delete "${noteToDelete.title}"?`);
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    try {
+      const response = await fetch(`/api/notebooks/${noteId}`, { method: 'DELETE', credentials: 'include' });
+
+      if (response.status === 401) {
+        setSession(null);
+        return;
+      }
+
+      if (!response.ok && response.status !== 204) {
+        throw new Error(await readErrorMessage(response, 'Unable to delete note.'));
+      }
+
+      setNotes((currentNotes) => currentNotes.filter((note) => note.id !== noteId));
+      setSelectedNoteIds((currentIds) => currentIds.filter((currentId) => currentId !== noteId));
+      setSelectedId((currentSelectedId) => {
+        if (currentSelectedId !== noteId) return currentSelectedId;
+
+        const remainingNotes = notes.filter((note) => note.id !== noteId);
+        const remainingVisibleNotes = getVisibleNotes(remainingNotes, showUniqueTitles, sortOrder);
+        return remainingVisibleNotes[0]?.id || null;
+      });
+      setMessage('Notebook entry deleted.');
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to delete note.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteSelectedArchiveNotes() {
+    if (selectedArchiveNotes.length === 0) {
+      setError('Select one or more notes first.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete ${selectedArchiveNotes.length} selected note(s)?`);
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    try {
+      await Promise.all(selectedArchiveNotes.map((note) => fetch(`/api/notebooks/${note.id}`, { method: 'DELETE', credentials: 'include' })));
+      const deletedIds = new Set(selectedArchiveNotes.map((note) => note.id));
+      const remainingNotes = notes.filter((note) => !deletedIds.has(note.id));
+      const remainingVisibleNotes = getVisibleNotes(remainingNotes, showUniqueTitles, sortOrder);
+
+      setNotes(remainingNotes);
+      setSelectedNoteIds([]);
+      setSelectedId((currentSelectedId) => (deletedIds.has(currentSelectedId) ? remainingVisibleNotes[0]?.id || null : currentSelectedId));
+      setForm(emptyForm);
+      setMessage(`${deletedIds.size} note(s) deleted.`);
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to delete selected notes.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteAllArchiveNotes() {
+    if (notes.length === 0) {
+      setError('No notes to delete.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete all ${notes.length} notes?`);
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError('');
+    setMessage('');
+
+    try {
+      await Promise.all(notes.map((note) => fetch(`/api/notebooks/${note.id}`, { method: 'DELETE', credentials: 'include' })));
+      setNotes([]);
+      setSelectedNoteIds([]);
+      setSelectedId(null);
+      setForm(emptyForm);
+      setMessage('All notes deleted.');
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to delete all notes.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveNote(event) {
     event.preventDefault();
     setSaving(true);
@@ -312,6 +420,9 @@ export default function App() {
       setSelectedId(savedNote.id);
       setSelectedNoteIds((currentIds) => (currentIds.includes(savedNote.id) ? currentIds : currentIds));
       setMessage(selectedNote ? 'Notebook entry updated.' : 'Notebook entry created.');
+      if (notesPopupMode === 'note') {
+        setNotesPopupMode(null);
+      }
     } catch (requestError) {
       setError(requestError.message || 'Unable to save note.');
     } finally {
@@ -363,6 +474,9 @@ export default function App() {
       });
       setSelectedId(generatedNotes[0]?.id || null);
       setMessage(`Generated ${generatedNotes.length} notes from ${topic}${tag ? ` under #${tag}` : ''}.`);
+      if (notesPopupMode === 'generate') {
+        setNotesPopupMode(null);
+      }
     } catch (requestError) {
       setGeneratorError(requestError.message || 'Unable to generate notes.');
     } finally {
@@ -416,6 +530,7 @@ export default function App() {
       });
       setSelectedExamId(nextExam.id);
       setExamAnswers({});
+      setExamGeneratorOpen(false);
     } catch (requestError) {
       setExamError(requestError.message || 'Unable to generate mock exam.');
     } finally {
@@ -479,92 +594,6 @@ export default function App() {
     }
   }
 
-  async function deleteMockExam(examId) {
-    const examToDelete = examList.find((exam) => exam.id === examId);
-
-    if (!examToDelete) {
-      return;
-    }
-
-    const confirmed = window.confirm(`Delete "${examToDelete.title}"?`);
-    if (!confirmed) return;
-
-    setExamLoading(true);
-    setExamError('');
-
-    try {
-      const response = await fetch(`/api/mock-exams/${examId}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
-      if (response.status === 401) {
-        setSession(null);
-        return;
-      }
-
-      if (!response.ok && response.status !== 204) {
-        throw new Error(await readErrorMessage(response, 'Unable to delete mock exam.'));
-      }
-
-      setExamList((currentExams) => currentExams.filter((exam) => exam.id !== examId));
-      setExamAnswers({});
-      setExamResult(null);
-      setSelectedExamId((currentSelectedExamId) => {
-        if (currentSelectedExamId !== examId) {
-          return currentSelectedExamId;
-        }
-
-        const remainingExams = examList.filter((exam) => exam.id !== examId);
-        return remainingExams[0]?.id || null;
-      });
-    } catch (requestError) {
-      setExamError(requestError.message || 'Unable to delete mock exam.');
-    } finally {
-      setExamLoading(false);
-    }
-  }
-
-  async function deleteNote(noteId) {
-    const noteToDelete = notes.find((note) => note.id === noteId);
-    if (!noteToDelete) return;
-
-    const confirmed = window.confirm(`Delete "${noteToDelete.title}"?`);
-    if (!confirmed) return;
-
-    setSaving(true);
-    setError('');
-    setMessage('');
-
-    try {
-      const response = await fetch(`/api/notebooks/${noteId}`, { method: 'DELETE', credentials: 'include' });
-
-      if (response.status === 401) {
-        setSession(null);
-        return;
-      }
-
-      if (!response.ok && response.status !== 204) {
-        throw new Error(await readErrorMessage(response, 'Unable to delete note.'));
-      }
-
-      setNotes((currentNotes) => currentNotes.filter((note) => note.id !== noteId));
-      setSelectedNoteIds((currentIds) => currentIds.filter((currentId) => currentId !== noteId));
-      setSelectedId((currentSelectedId) => {
-        if (currentSelectedId !== noteId) return currentSelectedId;
-
-        const remainingNotes = notes.filter((note) => note.id !== noteId);
-        const remainingVisibleNotes = getVisibleNotes(remainingNotes, showUniqueTitles, sortOrder);
-        return remainingVisibleNotes[0]?.id || null;
-      });
-      setMessage('Notebook entry deleted.');
-    } catch (requestError) {
-      setError(requestError.message || 'Unable to delete note.');
-    } finally {
-      setSaving(false);
-    }
-  }
-
   function startNewNote() {
     setSelectedId(newNoteId);
     setForm(emptyForm);
@@ -572,75 +601,32 @@ export default function App() {
     setMessage('');
   }
 
-  function toggleBulkDeleteMode() {
-    setBulkDeleteMode((currentMode) => !currentMode);
+  function openAllNotes() {
+    setActiveScreen('all-notes');
   }
 
-  function toggleNoteSelection(noteId) {
-    setSelectedNoteIds((currentIds) => (
-      currentIds.includes(noteId)
-        ? currentIds.filter((currentId) => currentId !== noteId)
-        : [...currentIds, noteId]
-    ));
+  function openNewNotePopup() {
+    setSelectedId(newNoteId);
+    setForm(emptyForm);
+    setNotesPopupMode('note');
   }
 
-  async function deleteSelectedNotes() {
-    if (selectedDeletableNotes.length === 0) {
-      setError('Select one or more notes first.');
-      return;
-    }
-
-    const confirmed = window.confirm(`Delete ${selectedDeletableNotes.length} selected note(s)?`);
-    if (!confirmed) return;
-
-    setSaving(true);
-    setError('');
-    setMessage('');
-
-    try {
-      await Promise.all(selectedDeletableNotes.map((note) => fetch(`/api/notebooks/${note.id}`, { method: 'DELETE', credentials: 'include' })));
-      const deletedIds = new Set(selectedDeletableNotes.map((note) => note.id));
-      const remainingNotes = notes.filter((note) => !deletedIds.has(note.id));
-      const remainingVisibleNotes = getVisibleNotes(remainingNotes, showUniqueTitles, sortOrder);
-
-      setNotes(remainingNotes);
-      setSelectedNoteIds([]);
-      setSelectedId((currentSelectedId) => (deletedIds.has(currentSelectedId) ? remainingVisibleNotes[0]?.id || null : currentSelectedId));
-      setForm(emptyForm);
-      setMessage(`${deletedIds.size} note(s) deleted.`);
-    } catch (requestError) {
-      setError(requestError.message || 'Unable to delete selected notes.');
-    } finally {
-      setSaving(false);
-    }
+  function openGeneratePopup() {
+    setNotesPopupMode('generate');
   }
 
-  async function deleteAllNotes() {
-    if (notes.length === 0) {
-      setError('No notes to delete.');
-      return;
-    }
-
-    const confirmed = window.confirm(`Delete all ${notes.length} notes?`);
-    if (!confirmed) return;
-
-    setSaving(true);
-    setError('');
-    setMessage('');
-
-    try {
-      await Promise.all(notes.map((note) => fetch(`/api/notebooks/${note.id}`, { method: 'DELETE', credentials: 'include' })));
-      setNotes([]);
-      setSelectedNoteIds([]);
-      setSelectedId(null);
-      setForm(emptyForm);
-      setMessage('All notes deleted.');
-    } catch (requestError) {
-      setError(requestError.message || 'Unable to delete all notes.');
-    } finally {
-      setSaving(false);
-    }
+  function closeNotesPopup() {
+    setNotesPopupMode(null);
   }
+
+  function openGenerateExamPopup() {
+    setExamGeneratorOpen(true);
+  }
+
+  function closeGenerateExamPopup() {
+    setExamGeneratorOpen(false);
+  }
+
 
   async function login(event) {
     event.preventDefault();
@@ -725,6 +711,156 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {examGeneratorOpen ? (
+        <div className="modal-overlay" role="presentation" onClick={closeGenerateExamPopup}>
+          <section
+            className="modal-card notes-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="exam-popup-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">Mock exam builder</p>
+                <h2 id="exam-popup-title">Generate mock exam with Groq</h2>
+              </div>
+              <button className="ghost-button" type="button" onClick={closeGenerateExamPopup}>
+                Close
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <form className="ai-generator exam-popup-generator" onSubmit={generateMockExam}>
+                <div className="ai-generator-heading">
+                  <h2>Generate mock exam with Groq</h2>
+                  <p>Enter a tag and Groq will build an exam based on matching notes.</p>
+                </div>
+
+                <label>
+                  <span>Tag</span>
+                  <input
+                    value={examTag}
+                    onChange={(event) => setExamTag(event.target.value)}
+                    placeholder="Example: programming"
+                    maxLength={40}
+                  />
+                </label>
+
+                <div className="ai-generator-footer">
+                  <p className="status-text">{examError || 'Uses all notes that share the tag to build one exam.'}</p>
+                  <button className="primary-button" type="submit" disabled={examLoading}>
+                    {examLoading ? 'Generating...' : 'Generate mock exam'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {notesPopupMode ? (
+        <div className="modal-overlay" role="presentation" onClick={closeNotesPopup}>
+          <section
+            className="modal-card notes-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notes-popup-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">{notesPopupMode === 'note' ? 'New note' : 'Generate notes'}</p>
+                <h2 id="notes-popup-title">{notesPopupMode === 'note' ? 'Create a note' : 'Generate from a topic'}</h2>
+              </div>
+              <button className="ghost-button" type="button" onClick={closeNotesPopup}>
+                Close
+              </button>
+            </div>
+
+            <div className="modal-body">
+              {notesPopupMode === 'note' ? (
+                <form className="editor-form notes-popup-form" onSubmit={saveNote}>
+                  <label>
+                    <span>Title</span>
+                    <input
+                      value={form.title}
+                      onChange={(event) => setForm((currentForm) => ({ ...currentForm, title: event.target.value }))}
+                      placeholder="Example: Weekly project plan"
+                      maxLength={120}
+                    />
+                  </label>
+
+                  <label>
+                    <span>Tag</span>
+                    <input
+                      value={form.tag}
+                      onChange={(event) => setForm((currentForm) => ({ ...currentForm, tag: event.target.value }))}
+                      placeholder="Example: planning"
+                      maxLength={40}
+                    />
+                  </label>
+
+                  <label>
+                    <span>Content</span>
+                    <textarea
+                      value={form.content}
+                      onChange={(event) => setForm((currentForm) => ({ ...currentForm, content: event.target.value }))}
+                      placeholder="Capture the important details here..."
+                      rows={12}
+                      maxLength={5000}
+                    />
+                  </label>
+
+                  <div className="form-footer">
+                    <p className="status-text">{message || 'Save changes to this notebook.'}</p>
+                    <button className="primary-button" type="submit" disabled={saving}>
+                      {saving ? 'Saving...' : selectedNote ? 'Update note' : 'Save note'}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form className="ai-generator notes-popup-generator" onSubmit={generateNotesFromTopic}>
+                  <div className="ai-generator-heading">
+                    <h2>Generate notes with Groq</h2>
+                    <p>Enter a topic and let the AI break it into focused study notes.</p>
+                  </div>
+
+                  <div className="ai-generator-grid">
+                    <label>
+                      <span>Topic</span>
+                      <input
+                        value={aiTopic}
+                        onChange={(event) => setAiTopic(event.target.value)}
+                        placeholder="Example: OOP"
+                        maxLength={120}
+                      />
+                    </label>
+
+                    <label>
+                      <span>Tag</span>
+                      <input
+                        value={aiTag}
+                        onChange={(event) => setAiTag(event.target.value)}
+                        placeholder="Example: programming"
+                        maxLength={40}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="ai-generator-footer">
+                    <p className="status-text">{generatorError || 'Creates separate notes for the main subtopics.'}</p>
+                    <button className="primary-button" type="submit" disabled={generating}>
+                      {generating ? 'Generating...' : 'Generate'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       <aside className="sidebar-shell">
         <section className="sidebar-section sidebar-navigation">
           <button
@@ -740,6 +876,13 @@ export default function App() {
             onClick={() => setActiveScreen('exam')}
           >
             Mock Exam Builder
+          </button>
+          <button
+            className={`sidebar-link ${activeScreen === 'all-notes' ? 'is-active' : ''}`}
+            type="button"
+            onClick={() => setActiveScreen('all-notes')}
+          >
+            Show all notes
           </button>
         </section>
 
@@ -758,30 +901,6 @@ export default function App() {
             <span>{searchedNotes.length}</span>
           </div>
 
-          <button className="sidebar-link sidebar-new-note" onClick={startNewNote} type="button">
-            + New note
-          </button>
-
-          <div className="bulk-actions sidebar-bulk-actions">
-            {bulkDeleteMode ? (
-              <>
-                <button className="ghost-button" type="button" onClick={deleteSelectedNotes} disabled={saving || selectedDeletableNotes.length === 0}>
-                  <span aria-hidden="true">🗑</span> Selected ({selectedDeletableNotes.length})
-                </button>
-                <button className="ghost-button" type="button" onClick={toggleBulkDeleteMode}>
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button className="ghost-button" type="button" onClick={toggleBulkDeleteMode}>
-                <span aria-hidden="true">🗑</span> Multiple
-              </button>
-            )}
-            <button className="danger-button" type="button" onClick={deleteAllNotes} disabled={saving || notes.length === 0}>
-              <span aria-hidden="true">🗑</span> All
-            </button>
-          </div>
-
           {loading ? (
             <div className="sidebar-empty">Loading notes...</div>
           ) : searchedNotes.length === 0 ? (
@@ -793,16 +912,6 @@ export default function App() {
             <div className="sidebar-note-list">
               {searchedNotes.map((note) => (
                 <label key={note.id} className={`sidebar-note-row ${note.id === selectedId ? 'is-active' : ''}`}>
-                  {bulkDeleteMode ? (
-                    <input
-                      className="sidebar-note-check"
-                      type="checkbox"
-                      checked={selectedNoteIds.includes(note.id)}
-                      onChange={() => toggleNoteSelection(note.id)}
-                    />
-                  ) : (
-                    <span className="sidebar-note-check-spacer" aria-hidden="true" />
-                  )}
                   <button
                     type="button"
                     className={`sidebar-note ${note.id === selectedId ? 'is-active' : ''}`}
@@ -812,73 +921,116 @@ export default function App() {
                     {note.tag ? <span className="note-tag">#{note.tag}</span> : null}
                     <span>{formatDate(note.updatedAt)}</span>
                   </button>
-                  <button
-                    className="ghost-button sidebar-note-delete"
-                    type="button"
-                    onClick={() => deleteNote(note.id)}
-                    aria-label={`Delete ${note.title}`}
-                  >
-                    <span aria-hidden="true">🗑</span>
-                  </button>
                 </label>
               ))}
             </div>
           )}
-
-          <p className="notes-selection-hint">
-            {bulkDeleteMode ? 'Select notes with the checkboxes, then delete the selected items.' : 'Hover a note to reveal delete, or use Delete multiple to select several notes.'}
-          </p>
         </section>
 
-        <section className="sidebar-section sidebar-footer">
-          <p>{session.username}</p>
-          <button className="ghost-button sidebar-signout" type="button" onClick={logout}>
-            Sign out
-          </button>
-        </section>
       </aside>
 
       <main className="app-frame">
         <section className="workspace">
-          {activeScreen === 'notes' ? (
-            <section className="editor-panel">
-              <form className="ai-generator" onSubmit={generateNotesFromTopic}>
-                <div className="ai-generator-heading">
-                  <h2>Generate notes with Groq</h2>
-                  <p>Enter a topic and let the AI break it into focused study notes.</p>
-                </div>
-
-                <div className="ai-generator-grid">
-                  <label>
-                    <span>Topic</span>
-                    <input
-                      value={aiTopic}
-                      onChange={(event) => setAiTopic(event.target.value)}
-                      placeholder="Example: OOP"
-                      maxLength={120}
-                    />
-                  </label>
-
-                  <label>
-                    <span>Tag</span>
-                    <input
-                      value={aiTag}
-                      onChange={(event) => setAiTag(event.target.value)}
-                      placeholder="Example: programming"
-                      maxLength={40}
-                    />
-                  </label>
-                </div>
-
-                <div className="ai-generator-footer">
-                  <p className="status-text">{generatorError || 'Creates separate notes for the main subtopics.'}</p>
-                  <button className="primary-button" type="submit" disabled={generating}>
-                    {generating ? 'Generating...' : 'Generate notes'}
+          {activeScreen === 'all-notes' ? (
+            <section className="editor-panel notes-archive-panel">
+              <div className="workspace-header notes-archive-header">
+                <button className="ghost-button" type="button" onClick={() => setActiveScreen('notes')}>
+                  Back
+                </button>
+                <div className="notes-archive-actions">
+                  {archiveBulkDeleteMode ? (
+                    <>
+                      <button className="ghost-button" type="button" onClick={deleteSelectedArchiveNotes} disabled={saving || selectedArchiveNotes.length === 0}>
+                        Selected ({selectedArchiveNotes.length})
+                      </button>
+                      <button className="ghost-button" type="button" onClick={toggleArchiveBulkDeleteMode}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button className="ghost-button" type="button" onClick={toggleArchiveBulkDeleteMode}>
+                      Multiple
+                    </button>
+                  )}
+                  <button className="danger-button" type="button" onClick={deleteAllArchiveNotes} disabled={saving || notes.length === 0}>
+                    All
                   </button>
                 </div>
-              </form>
+              </div>
 
-                <form className="editor-form" onSubmit={saveNote}>
+              {loading ? (
+                <p className="status-text">Loading notes...</p>
+              ) : notes.length === 0 ? (
+                <p className="status-text">No notes saved yet.</p>
+              ) : (
+                <div className="notes-archive-list">
+                  {[...notes]
+                    .sort((noteA, noteB) => compareByUpdatedAt(noteA, noteB, sortOrder))
+                    .map((note) => (
+                      <div key={note.id} className={`notes-archive-row ${selectedNoteIds.includes(note.id) ? 'is-active' : ''}`}>
+                        {archiveBulkDeleteMode ? (
+                          <input
+                            className="notes-archive-check"
+                            type="checkbox"
+                            checked={selectedNoteIds.includes(note.id)}
+                            onChange={() => toggleArchiveNoteSelection(note.id)}
+                          />
+                        ) : (
+                          <span className="notes-archive-check-spacer" aria-hidden="true" />
+                        )}
+                        <button
+                          className="notes-archive-item"
+                          type="button"
+                          onClick={() => {
+                            if (archiveBulkDeleteMode) {
+                              toggleArchiveNoteSelection(note.id);
+                              return;
+                            }
+
+                            setSelectedId(note.id);
+                            setActiveScreen('notes');
+                          }}
+                        >
+                          <div className="notes-archive-item-header">
+                            <strong>{note.title}</strong>
+                            <span>{formatDate(note.updatedAt)}</span>
+                          </div>
+                          {note.tag ? <span className="note-tag">#{note.tag}</span> : null}
+                          <p>{note.content}</p>
+                        </button>
+                        <button
+                          className="ghost-button notes-archive-delete"
+                          type="button"
+                          onClick={() => deleteArchiveNote(note.id)}
+                          aria-label={`Delete ${note.title}`}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </section>
+          ) : activeScreen === 'notes' ? (
+            <section className="editor-panel notes-workspace">
+              <div className="notes-top-actions">
+                <button className="small-floating-button" type="button" onClick={openNewNotePopup} aria-label="Add note">
+                  +
+                </button>
+                <button className="small-floating-button" type="button" onClick={openGeneratePopup}>
+                  Generate
+                </button>
+              </div>
+
+              <div className="notes-workspace-copy">
+                <p className="eyebrow">Notes workspace</p>
+                <h2>{selectedNote ? selectedNote.title : 'Select a note from the sidebar'}</h2>
+                <p className="subcopy">
+                  Use the fixed buttons in the top-right corner to add a note or generate new notes without taking space from the editor.
+                </p>
+              </div>
+
+              <form className="editor-form" onSubmit={saveNote}>
                 <label>
                   <span>Title</span>
                   <input
@@ -922,29 +1074,17 @@ export default function App() {
             </section>
           ) : (
             <section className="editor-panel exam-panel">
-              <form className="exam-generator" onSubmit={generateMockExam}>
-                <div className="ai-generator-heading">
-                  <h2>Generate mock exam with Groq</h2>
-                  <p>Enter a tag and Groq will build an exam based on matching notes.</p>
-                </div>
+              <div className="exam-top-actions">
+                <button className="small-floating-button" type="button" onClick={openGenerateExamPopup}>
+                  Generate
+                </button>
+              </div>
 
-                <label>
-                  <span>Tag</span>
-                  <input
-                    value={examTag}
-                    onChange={(event) => setExamTag(event.target.value)}
-                    placeholder="Example: programming"
-                    maxLength={40}
-                  />
-                </label>
-
-                <div className="ai-generator-footer">
-                  <p className="status-text">{examError || 'Uses all notes that share the tag to build one exam.'}</p>
-                  <button className="primary-button" type="submit" disabled={examLoading}>
-                    {examLoading ? 'Generating...' : 'Generate mock exam'}
-                  </button>
-                </div>
-              </form>
+              <div className="exam-workspace-copy">
+                <p className="eyebrow">Mock exam builder</p>
+                <h2>Generate mock exam with Groq</h2>
+                <p className="subcopy">Open the floating button to build an exam from notes that share a tag.</p>
+              </div>
 
               <section className="exam-lms-layout">
                 <aside className="exam-list-card">
@@ -965,14 +1105,6 @@ export default function App() {
                             <strong>{exam.title}</strong>
                             <span>#{exam.tag}</span>
                             <span>{exam.questionCount} questions</span>
-                          </button>
-                          <button
-                            className="ghost-button exam-list-delete"
-                            type="button"
-                            onClick={() => deleteMockExam(exam.id)}
-                            aria-label={`Delete ${exam.title}`}
-                          >
-                            <span aria-hidden="true">🗑</span>
                           </button>
                         </div>
                       ))}

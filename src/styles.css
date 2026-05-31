@@ -215,36 +215,7 @@ button {
 
 .sidebar-note-row {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  align-items: stretch;
-  gap: 10px;
-}
-
-.sidebar-note-check {
-  width: 16px;
-  height: 16px;
-  margin-top: 14px;
-  accent-color: #d9dde3;
-  justify-self: center;
-}
-
-.sidebar-note-check-spacer {
-  width: 16px;
-  height: 16px;
-  margin-top: 14px;
-}
-
-.sidebar-note-delete {
-  align-self: center;
-  min-width: 36px;
-  height: 36px;
-  padding-inline: 10px;
-  display: none;
-}
-
-.sidebar-note-row:hover .sidebar-note-delete,
-.sidebar-note-row:focus-within .sidebar-note-delete {
-  display: inline-flex;
+  grid-template-columns: 1fr;
 }
 
 .sidebar-note strong,
@@ -330,10 +301,100 @@ button {
   padding: 22px;
 }
 
+.notes-top-actions,
+.exam-top-actions {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 20;
+  display: flex;
+  gap: 8px;
+}
+
+.small-floating-button {
+  min-width: 42px;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.18);
+}
+
+.notes-top-actions .small-floating-button:first-child {
+  width: 40px;
+  padding-inline: 0;
+}
+
+.small-floating-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(7, 9, 12, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.modal-card {
+  width: min(820px, calc(100vw - 32px));
+  max-height: min(86vh, 900px);
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #0e1013;
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.modal-header h2 {
+  margin: 6px 0 0;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.modal-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.notes-popup-form,
+.notes-popup-generator,
+.exam-popup-generator {
+  margin-bottom: 0;
+}
+
+.notes-popup-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.notes-popup-form > label:nth-of-type(3),
+.notes-popup-form > .form-footer {
+  grid-column: 1 / -1;
+}
+
+.notes-popup-form > .form-footer {
+  margin-top: 4px;
+}
+
 .ai-generator {
   display: grid;
-  gap: 18px;
-  padding: 18px;
+  gap: 12px;
+  padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.02);
   margin-bottom: 18px;
@@ -350,7 +411,7 @@ button {
 }
 
 .ai-generator-heading h2 {
-  font-size: 1rem;
+  font-size: 0.92rem;
   letter-spacing: -0.02em;
 }
 
@@ -362,14 +423,14 @@ button {
 .ai-generator-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: 12px;
+  gap: 8px;
 }
 
 .ai-generator-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 8px;
 }
 
 .bulk-actions {
@@ -390,8 +451,7 @@ button {
 }
 
 .sidebar-bulk-actions .ghost-button span,
-.sidebar-bulk-actions .danger-button span,
-.sidebar-note-delete span {
+.sidebar-bulk-actions .danger-button span {
   display: inline-block;
   transform: translateY(1px);
 }
@@ -415,8 +475,120 @@ button {
   max-width: 58ch;
 }
 
+.notes-archive-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.notes-archive-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.notes-archive-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.notes-archive-list {
+  display: grid;
+  gap: 12px;
+}
+
+.notes-archive-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.notes-archive-check {
+  width: 16px;
+  height: 16px;
+  margin-top: 14px;
+  accent-color: #d9dde3;
+  justify-self: center;
+}
+
+.notes-archive-check-spacer {
+  width: 16px;
+  height: 16px;
+  margin-top: 14px;
+}
+
+.notes-archive-item {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+}
+
+.notes-archive-item:hover,
+.notes-archive-item:focus-within {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.notes-archive-delete {
+  align-self: center;
+  height: 36px;
+  padding-inline: 12px;
+  display: none;
+}
+
+.notes-archive-row:hover .notes-archive-delete,
+.notes-archive-row:focus-within .notes-archive-delete {
+  display: inline-flex;
+}
+
+.notes-archive-row.is-active .notes-archive-item {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.notes-archive-item-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.notes-archive-item p {
+  margin: 0;
+  color: rgba(231, 232, 235, 0.88);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .editor-panel {
   min-height: auto;
+}
+
+.notes-workspace {
+  padding-top: 24px;
+}
+
+.notes-workspace-copy {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.exam-workspace-copy {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.editor-form {
+  min-height: calc(100vh - 260px);
 }
 
 .exam-panel {
@@ -884,6 +1056,49 @@ textarea {
 
   .bulk-actions {
     flex-direction: column;
+  }
+
+  .notes-archive-header {
+    flex-direction: column;
+  }
+
+  .notes-workspace {
+    padding-top: 16px;
+  }
+
+  .notes-top-actions,
+  .exam-top-actions {
+    top: 12px;
+    right: 12px;
+  }
+
+  .modal-overlay {
+    padding: 12px;
+  }
+
+  .modal-card {
+    width: calc(100vw - 24px);
+  }
+
+  .notes-popup-form {
+    grid-template-columns: 1fr;
+  }
+
+  .notes-popup-form > label:nth-of-type(3),
+  .notes-popup-form > .form-footer {
+    grid-column: auto;
+  }
+
+  .modal-header {
+    flex-direction: column;
+  }
+
+  .notes-toolbar-new {
+    width: 100%;
+  }
+
+  .editor-form {
+    min-height: auto;
   }
 
   .exam-option {
