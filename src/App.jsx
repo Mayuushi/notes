@@ -93,6 +93,11 @@ export default function App() {
   const [examAnswers, setExamAnswers] = useState({});
   const [examResult, setExamResult] = useState(null);
   const [examGeneratorOpen, setExamGeneratorOpen] = useState(false);
+  const [examNotesPickerOpen, setExamNotesPickerOpen] = useState(false);
+  const [selectedExamSourceNoteIds, setSelectedExamSourceNoteIds] = useState([]);
+  const [examNotesQuery, setExamNotesQuery] = useState('');
+  const [examQuestionCount, setExamQuestionCount] = useState(12);
+  const [selectedNotesQuestionCount, setSelectedNotesQuestionCount] = useState(12);
 
   const visibleNotes = useMemo(
     () => getVisibleNotes(notes, showUniqueTitles, sortOrder),
@@ -122,6 +127,19 @@ export default function App() {
     () => examList.find((exam) => exam.id === selectedExamId) || null,
     [examList, selectedExamId],
   );
+  const [displayedExam, setDisplayedExam] = useState(null);
+  const filteredExamSourceNotes = useMemo(() => {
+    const query = examNotesQuery.trim().toLowerCase();
+
+    if (!query) {
+      return notes;
+    }
+
+    return notes.filter((note) => {
+      const haystack = `${note.title} ${note.content} ${note.tag || ''}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [examNotesQuery, notes]);
 
   useEffect(() => {
     loadSession();
@@ -488,6 +506,7 @@ export default function App() {
     event.preventDefault();
 
     const tag = examTag.trim();
+    const questionCount = Math.max(5, Math.min(30, Number.parseInt(String(examQuestionCount), 10) || 12));
 
     if (!tag) {
       setExamError('Enter a tag to generate a mock exam.');
@@ -505,7 +524,7 @@ export default function App() {
           'Content-Type': 'application/json',
         },
         credentials: 'include',
-        body: JSON.stringify({ tag }),
+        body: JSON.stringify({ tag, questionCount }),
       });
 
       if (response.status === 401) {
@@ -533,6 +552,62 @@ export default function App() {
       setExamGeneratorOpen(false);
     } catch (requestError) {
       setExamError(requestError.message || 'Unable to generate mock exam.');
+    } finally {
+      setExamLoading(false);
+    }
+  }
+
+  async function generateMockExamFromSelectedNotes(event) {
+    event.preventDefault();
+
+    const questionCount = Math.max(5, Math.min(30, Number.parseInt(String(selectedNotesQuestionCount), 10) || 12));
+
+    if (selectedExamSourceNoteIds.length === 0) {
+      setExamError('Select one or more notes first.');
+      return;
+    }
+
+    setExamLoading(true);
+    setExamError('');
+    setExamResult(null);
+
+    try {
+      const response = await fetch('/api/ai/mock-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ noteIds: selectedExamSourceNoteIds, questionCount }),
+      });
+
+      if (response.status === 401) {
+        setSession(null);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, 'Unable to generate mock exam from selected notes.'));
+      }
+
+      const data = await response.json();
+      const nextExam = data.exam || null;
+
+      if (!nextExam) {
+        throw new Error('Unable to read generated exam.');
+      }
+
+      setExamList((currentExams) => {
+        const deduped = currentExams.filter((exam) => exam.id !== nextExam.id);
+        return [nextExam, ...deduped];
+      });
+      setSelectedExamId(nextExam.id);
+      setExamAnswers({});
+      setExamNotesPickerOpen(false);
+      setSelectedExamSourceNoteIds([]);
+      setExamNotesQuery('');
+    } catch (requestError) {
+      setExamError(requestError.message || 'Unable to generate mock exam from selected notes.');
     } finally {
       setExamLoading(false);
     }
@@ -591,6 +666,33 @@ export default function App() {
     setExamError('');
   }
 
+  useEffect(() => {
+    if (!selectedExam) {
+      setDisplayedExam(null);
+      return;
+    }
+
+    // Build a shuffled view of the exam questions so choices appear in random order
+    try {
+      const copy = JSON.parse(JSON.stringify(selectedExam));
+      copy.questions = (copy.questions || []).map((q) => {
+        const indices = (q.options || []).map((_, i) => i);
+        // Fisher-Yates shuffle
+        for (let i = indices.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [indices[i], indices[j]] = [indices[j], indices[i]];
+        }
+        const shuffledOptions = indices.map((i) => (q.options || [])[i]);
+        return { ...q, options: shuffledOptions, shuffledToOriginalIndex: indices };
+      });
+
+      setDisplayedExam(copy);
+    } catch (e) {
+      // Fallback: if anything goes wrong, just show the original exam
+      setDisplayedExam(selectedExam);
+    }
+  }, [selectedExam]);
+
   function selectExamAnswer(questionId, answerIndex) {
     setExamAnswers((currentAnswers) => ({
       ...currentAnswers,
@@ -610,6 +712,17 @@ export default function App() {
     setExamError('');
 
     try {
+      // Map answers from displayed (shuffled) indices back to the original indices
+      const answersToSend = {};
+      Object.keys(examAnswers).forEach((questionId) => {
+        const displayedQ = (displayedExam || selectedExam)?.questions.find((q) => q.id === questionId);
+        if (!displayedQ) return;
+        const shuffledMap = displayedQ.shuffledToOriginalIndex || (displayedQ.options || []).map((_, i) => i);
+        const chosenDisplayedIndex = examAnswers[questionId];
+        const originalIndex = shuffledMap[chosenDisplayedIndex] ?? chosenDisplayedIndex;
+        answersToSend[questionId] = originalIndex;
+      });
+
       const response = await fetch('/api/mock-exams/attempt', {
         method: 'POST',
         headers: {
@@ -618,7 +731,7 @@ export default function App() {
         credentials: 'include',
         body: JSON.stringify({
           examId: selectedExam.id,
-          answers: examAnswers,
+          answers: answersToSend,
         }),
       });
 
@@ -673,6 +786,23 @@ export default function App() {
     setExamGeneratorOpen(false);
   }
 
+  function openExamNotesPicker() {
+    setExamNotesPickerOpen(true);
+    setExamError('');
+  }
+
+  function closeExamNotesPicker() {
+    setExamNotesPickerOpen(false);
+  }
+
+  function toggleExamSourceNoteSelection(noteId) {
+    setSelectedExamSourceNoteIds((currentIds) => (
+      currentIds.includes(noteId)
+        ? currentIds.filter((currentId) => currentId !== noteId)
+        : [...currentIds, noteId]
+    ));
+  }
+
 
   async function login(event) {
     event.preventDefault();
@@ -707,6 +837,8 @@ export default function App() {
     setSelectedId(null);
     setForm(emptyForm);
   }
+
+  const examToRender = displayedExam || selectedExam;
 
   if (authLoading) {
     return (
@@ -757,6 +889,84 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {examNotesPickerOpen ? (
+        <div className="modal-overlay" role="presentation" onClick={closeExamNotesPicker}>
+          <section
+            className="modal-card notes-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="exam-notes-picker-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">Mock exam builder</p>
+                <h2 id="exam-notes-picker-title">Generate from selected notes</h2>
+              </div>
+              <button className="ghost-button" type="button" onClick={closeExamNotesPicker}>
+                Close
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <form className="exam-notes-picker" onSubmit={generateMockExamFromSelectedNotes}>
+                <label>
+                  <span>Search notes</span>
+                  <input
+                    value={examNotesQuery}
+                    onChange={(event) => setExamNotesQuery(event.target.value)}
+                    placeholder="Search by title, tag, or content"
+                  />
+                </label>
+
+                <label>
+                  <span>Number of questions</span>
+                  <input
+                    type="number"
+                    min={5}
+                    max={30}
+                    value={selectedNotesQuestionCount}
+                    onChange={(event) => setSelectedNotesQuestionCount(event.target.value)}
+                  />
+                </label>
+
+                <p className="status-text">
+                  Selected {selectedExamSourceNoteIds.length} note{selectedExamSourceNoteIds.length === 1 ? '' : 's'}.
+                </p>
+
+                <div className="exam-note-selection-list">
+                  {filteredExamSourceNotes.length === 0 ? (
+                    <p className="status-text">No matching notes found.</p>
+                  ) : (
+                    filteredExamSourceNotes.map((note) => (
+                      <label key={note.id} className="exam-note-selection-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedExamSourceNoteIds.includes(note.id)}
+                          onChange={() => toggleExamSourceNoteSelection(note.id)}
+                        />
+                        <div>
+                          <strong>{note.title}</strong>
+                          {note.tag ? <span className="note-tag">#{note.tag}</span> : null}
+                          <span>{formatDate(note.updatedAt)}</span>
+                        </div>
+                      </label>
+                    ))
+                  )}
+                </div>
+
+                <div className="ai-generator-footer">
+                  <p className="status-text">{examError || 'Pick multiple notes and generate one mock exam from them.'}</p>
+                  <button className="primary-button" type="submit" disabled={examLoading || selectedExamSourceNoteIds.length === 0}>
+                    {examLoading ? 'Generating...' : 'Generate mock exam'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {examGeneratorOpen ? (
         <div className="modal-overlay" role="presentation" onClick={closeGenerateExamPopup}>
           <section
@@ -790,6 +1000,17 @@ export default function App() {
                     onChange={(event) => setExamTag(event.target.value)}
                     placeholder="Example: programming"
                     maxLength={40}
+                  />
+                </label>
+
+                <label>
+                  <span>Number of questions</span>
+                  <input
+                    type="number"
+                    min={5}
+                    max={30}
+                    value={examQuestionCount}
+                    onChange={(event) => setExamQuestionCount(event.target.value)}
                   />
                 </label>
 
@@ -1121,6 +1342,9 @@ export default function App() {
           ) : (
             <section className="editor-panel exam-panel">
               <div className="exam-top-actions">
+                <button className="small-floating-button floating-icon-button" type="button" onClick={openExamNotesPicker} aria-label="Generate from selected notes">
+                  +
+                </button>
                 <button className="small-floating-button" type="button" onClick={openGenerateExamPopup}>
                   Generate
                 </button>
@@ -1167,18 +1391,18 @@ export default function App() {
                 </aside>
 
                 <section className="exam-player-card">
-                  {selectedExam ? (
+                  {examToRender ? (
                     <form className="exam-player" onSubmit={submitExamAttempt}>
                       <div className="exam-player-header">
-                        <h3>{selectedExam.title}</h3>
+                        <h3>{examToRender.title}</h3>
                         <p className="status-text">
-                          #{selectedExam.tag} • {selectedExam.questionCount} questions • {selectedExam.timeLimitMinutes} min suggested time
+                          #{examToRender.tag} • {examToRender.questionCount} questions • {examToRender.timeLimitMinutes} min suggested time
                         </p>
-                        <p className="status-text">{selectedExam.instructions}</p>
+                        <p className="status-text">{examToRender.instructions}</p>
                       </div>
 
                       <div className="exam-questions">
-                        {(selectedExam.questions || []).map((question, questionIndex) => (
+                        {(examToRender.questions || []).map((question, questionIndex) => (
                           <fieldset key={question.id} className="exam-question">
                             <legend>
                               {questionIndex + 1}. {question.prompt}
