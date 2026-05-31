@@ -1,0 +1,24 @@
+{
+  "name": "notebook-serverless-vercel",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev:client": "vite",
+    "dev:functions": "vercel dev --listen 3000",
+    "dev": "concurrently -k \"npm run dev:client\" \"npm run dev:functions\"",
+    "build": "vite build",
+    "preview": "vite preview",
+    "vercel-build": "vite build"
+  },
+  "dependencies": {
+    "mongodb": "^6.18.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "vite": "^5.4.19"
+  }
+}
