@@ -1177,12 +1177,15 @@ export default function App() {
             </div>
           ) : (
             <div className="sidebar-note-list">
-              {searchedNotes.map((note) => (
+                  {searchedNotes.map((note) => (
                 <label key={note.id} className={`sidebar-note-row ${note.id === selectedId ? 'is-active' : ''}`}>
                   <button
                     type="button"
                     className={`sidebar-note ${note.id === selectedId ? 'is-active' : ''}`}
-                    onClick={() => setSelectedId(note.id)}
+                    onClick={() => {
+                      setSelectedId(note.id);
+                      setActiveScreen('notes');
+                    }}
                   >
                     <strong>{note.title}</strong>
                     {note.tag ? <span className="note-tag">#{note.tag}</span> : null}
