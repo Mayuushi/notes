@@ -70,7 +70,10 @@ export default function App() {
   const [notes, setNotes] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [selectedNoteIds, setSelectedNoteIds] = useState([]);
-  const [archiveBulkDeleteMode, setArchiveBulkDeleteMode] = useState(false);
+  const [archiveManageOpen, setArchiveManageOpen] = useState(false);
+  const [deletePrompt, setDeletePrompt] = useState(null);
+  const [deletePromptError, setDeletePromptError] = useState('');
+  const [deleting, setDeleting] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -79,6 +82,7 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState('newest');
   const [showUniqueTitles, setShowUniqueTitles] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [archiveSearchQuery, setArchiveSearchQuery] = useState('');
   const [notesPopupMode, setNotesPopupMode] = useState(null);
   const [aiTopic, setAiTopic] = useState('OOP');
   const [aiTag, setAiTag] = useState('');
@@ -104,6 +108,7 @@ export default function App() {
   const [freeformExamQuestionCount, setFreeformExamQuestionCount] = useState(12);
   const [examAttempts, setExamAttempts] = useState([]);
   const [examAttemptsLoading, setExamAttemptsLoading] = useState(false);
+  const [noteEditorMode, setNoteEditorMode] = useState('view');
 
   const visibleNotes = useMemo(
     () => getVisibleNotes(notes, showUniqueTitles, sortOrder),
@@ -125,10 +130,19 @@ export default function App() {
     () => visibleNotes.find((note) => note.id === selectedId) || null,
     [visibleNotes, selectedId],
   );
-  const selectedArchiveNotes = useMemo(
-    () => notes.filter((note) => selectedNoteIds.includes(note.id)),
-    [notes, selectedNoteIds],
-  );
+  const archiveVisibleNotes = useMemo(() => {
+    const query = archiveSearchQuery.trim().toLowerCase();
+    const sortedNotes = [...notes].sort((noteA, noteB) => compareByUpdatedAt(noteA, noteB, sortOrder));
+
+    if (!query) {
+      return sortedNotes;
+    }
+
+    return sortedNotes.filter((note) => {
+      const haystack = `${note.title} ${note.content} ${note.tag || ''}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [archiveSearchQuery, notes, sortOrder]);
   const selectedExam = useMemo(
     () => examList.find((exam) => exam.id === selectedExamId) || null,
     [examList, selectedExamId],
@@ -156,7 +170,7 @@ export default function App() {
       setNotes([]);
       setSelectedId(null);
       setSelectedNoteIds([]);
-      setArchiveBulkDeleteMode(false);
+      setArchiveManageOpen(false);
       setForm(emptyForm);
       return;
     }
@@ -171,8 +185,10 @@ export default function App() {
 
     if (selectedNote) {
       setForm({ title: selectedNote.title, content: selectedNote.content, tag: selectedNote.tag || '' });
+      setNoteEditorMode(selectedId === newNoteId ? 'edit' : 'view');
     } else {
       setForm(emptyForm);
+      setNoteEditorMode(selectedId === newNoteId ? 'edit' : 'view');
     }
   }, [selectedNote, session]);
 
@@ -202,12 +218,6 @@ export default function App() {
 
     loadMockExams();
   }, [activeScreen, session]);
-
-  useEffect(() => {
-    if (!archiveBulkDeleteMode) {
-      setSelectedNoteIds([]);
-    }
-  }, [archiveBulkDeleteMode]);
 
   async function loadSession() {
     setAuthLoading(true);
@@ -284,10 +294,6 @@ export default function App() {
     }
   }
 
-  function toggleArchiveBulkDeleteMode() {
-    setArchiveBulkDeleteMode((currentMode) => !currentMode);
-  }
-
   function toggleArchiveNoteSelection(noteId) {
     setSelectedNoteIds((currentIds) => (
       currentIds.includes(noteId)
@@ -296,62 +302,91 @@ export default function App() {
     ));
   }
 
-  async function deleteArchiveNote(noteId) {
-    const noteToDelete = notes.find((note) => note.id === noteId);
-    if (!noteToDelete) return;
-
-    const confirmed = window.confirm(`Delete "${noteToDelete.title}"?`);
-    if (!confirmed) return;
-
-    setSaving(true);
+  function openArchiveManage() {
+    setSelectedNoteIds([]);
+    setArchiveManageOpen(true);
     setError('');
-    setMessage('');
-
-    try {
-      const response = await fetch(`/api/notebooks/${noteId}`, { method: 'DELETE', credentials: 'include' });
-
-      if (response.status === 401) {
-        setSession(null);
-        return;
-      }
-
-      if (!response.ok && response.status !== 204) {
-        throw new Error(await readErrorMessage(response, 'Unable to delete note.'));
-      }
-
-      setNotes((currentNotes) => currentNotes.filter((note) => note.id !== noteId));
-      setSelectedNoteIds((currentIds) => currentIds.filter((currentId) => currentId !== noteId));
-      setSelectedId((currentSelectedId) => {
-        if (currentSelectedId !== noteId) return currentSelectedId;
-
-        const remainingNotes = notes.filter((note) => note.id !== noteId);
-        const remainingVisibleNotes = getVisibleNotes(remainingNotes, showUniqueTitles, sortOrder);
-        return remainingVisibleNotes[0]?.id || null;
-      });
-      setMessage('Notebook entry deleted.');
-    } catch (requestError) {
-      setError(requestError.message || 'Unable to delete note.');
-    } finally {
-      setSaving(false);
-    }
   }
 
-  async function deleteSelectedArchiveNotes() {
-    if (selectedArchiveNotes.length === 0) {
-      setError('Select one or more notes first.');
+  function closeArchiveManage() {
+    setArchiveManageOpen(false);
+    setSelectedNoteIds([]);
+  }
+
+  function openDeletePrompt(prompt) {
+    if (deleting) {
       return;
     }
 
-    const confirmed = window.confirm(`Delete ${selectedArchiveNotes.length} selected note(s)?`);
-    if (!confirmed) return;
+    setDeletePromptError('');
+    setDeletePrompt(prompt);
+  }
 
-    setSaving(true);
+  function closeDeletePrompt() {
+    if (deleting) {
+      return;
+    }
+
+    setDeletePromptError('');
+    setDeletePrompt(null);
+  }
+
+  async function confirmDeletePrompt() {
+    if (!deletePrompt) {
+      return;
+    }
+
+    setDeleting(true);
     setError('');
     setMessage('');
+    setDeletePromptError('');
 
     try {
-      await Promise.all(selectedArchiveNotes.map((note) => fetch(`/api/notebooks/${note.id}`, { method: 'DELETE', credentials: 'include' })));
-      const deletedIds = new Set(selectedArchiveNotes.map((note) => note.id));
+      await deletePrompt.onConfirm();
+      setDeletePrompt(null);
+    } catch (requestError) {
+      setDeletePromptError(requestError.message || 'Unable to delete item.');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function performDeleteArchiveNotesByIds(noteIds) {
+    const uniqueIds = [...new Set(noteIds)];
+
+    if (uniqueIds.length === 0) {
+      throw new Error('Select one or more notes first.');
+    }
+
+    const notesToDelete = notes.filter((note) => uniqueIds.includes(note.id));
+
+    if (notesToDelete.length === 0) {
+      throw new Error('No notes to delete.');
+    }
+
+    try {
+      const responses = await Promise.all(
+        notesToDelete.map(async (note) => {
+          const response = await fetch(`/api/notebooks/${note.id}`, { method: 'DELETE', credentials: 'include' });
+
+          if (response.status === 401) {
+            setSession(null);
+            return response;
+          }
+
+          if (!response.ok && response.status !== 204) {
+            throw new Error(await readErrorMessage(response, 'Unable to delete note.'));
+          }
+
+          return response;
+        }),
+      );
+
+      if (responses.some((response) => response.status === 401)) {
+        return;
+      }
+
+      const deletedIds = new Set(notesToDelete.map((note) => note.id));
       const remainingNotes = notes.filter((note) => !deletedIds.has(note.id));
       const remainingVisibleNotes = getVisibleNotes(remainingNotes, showUniqueTitles, sortOrder);
 
@@ -360,38 +395,28 @@ export default function App() {
       setSelectedId((currentSelectedId) => (deletedIds.has(currentSelectedId) ? remainingVisibleNotes[0]?.id || null : currentSelectedId));
       setForm(emptyForm);
       setMessage(`${deletedIds.size} note(s) deleted.`);
+      setArchiveManageOpen(false);
     } catch (requestError) {
-      setError(requestError.message || 'Unable to delete selected notes.');
-    } finally {
-      setSaving(false);
+      throw requestError;
     }
   }
 
   async function deleteAllArchiveNotes() {
-    if (notes.length === 0) {
-      setError('No notes to delete.');
-      return;
-    }
+    openDeletePrompt({
+      title: `Delete all ${notes.length} notes?`,
+      description: 'This will permanently remove every note in the archive.',
+      confirmLabel: 'Delete all',
+      onConfirm: () => performDeleteArchiveNotesByIds(notes.map((note) => note.id)),
+    });
+  }
 
-    const confirmed = window.confirm(`Delete all ${notes.length} notes?`);
-    if (!confirmed) return;
-
-    setSaving(true);
-    setError('');
-    setMessage('');
-
-    try {
-      await Promise.all(notes.map((note) => fetch(`/api/notebooks/${note.id}`, { method: 'DELETE', credentials: 'include' })));
-      setNotes([]);
-      setSelectedNoteIds([]);
-      setSelectedId(null);
-      setForm(emptyForm);
-      setMessage('All notes deleted.');
-    } catch (requestError) {
-      setError(requestError.message || 'Unable to delete all notes.');
-    } finally {
-      setSaving(false);
-    }
+  async function deleteSelectedArchiveNotes() {
+    openDeletePrompt({
+      title: `Delete ${selectedNoteIds.length} selected note(s)?`,
+      description: 'This will permanently remove the selected notes.',
+      confirmLabel: 'Delete selected',
+      onConfirm: () => performDeleteArchiveNotesByIds(selectedNoteIds),
+    });
   }
 
   async function saveNote(event) {
@@ -676,18 +701,11 @@ export default function App() {
     }
   }
 
-  async function deleteMockExam(examId) {
+  async function performDeleteMockExam(examId) {
     const examToDelete = examList.find((exam) => exam.id === examId);
     if (!examToDelete) {
-      return;
+      throw new Error('Unable to delete mock exam.');
     }
-
-    const confirmed = window.confirm(`Delete mock exam "${examToDelete.title}"?`);
-    if (!confirmed) {
-      return;
-    }
-
-    setExamError('');
 
     try {
       const response = await fetch(`/api/mock-exams/${examId}`, {
@@ -718,8 +736,23 @@ export default function App() {
         setExamResult(null);
       }
     } catch (requestError) {
-      setExamError(requestError.message || 'Unable to delete mock exam.');
+      throw requestError;
     }
+  }
+
+  function deleteMockExam(examId) {
+    const examToDelete = examList.find((exam) => exam.id === examId);
+
+    if (!examToDelete) {
+      return;
+    }
+
+    openDeletePrompt({
+      title: `Delete mock exam "${examToDelete.title}"?`,
+      description: 'This cannot be undone.',
+      confirmLabel: 'Delete exam',
+      onConfirm: () => performDeleteMockExam(examId),
+    });
   }
 
   function selectExam(examId) {
@@ -867,6 +900,7 @@ export default function App() {
   function startNewNote() {
     setSelectedId(newNoteId);
     setForm(emptyForm);
+    setNoteEditorMode('edit');
     setError('');
     setMessage('');
   }
@@ -878,11 +912,33 @@ export default function App() {
   function openNewNotePopup() {
     setSelectedId(newNoteId);
     setForm(emptyForm);
+    setNoteEditorMode('edit');
     setNotesPopupMode('note');
   }
 
   function openGeneratePopup() {
     setNotesPopupMode('generate');
+  }
+
+  function startEditingSelectedNote() {
+    if (!selectedNote) {
+      return;
+    }
+
+    setForm({ title: selectedNote.title, content: selectedNote.content, tag: selectedNote.tag || '' });
+    setNoteEditorMode('edit');
+    setError('');
+    setMessage('');
+  }
+
+  function cancelEditingSelectedNote() {
+    if (!selectedNote) {
+      return;
+    }
+
+    setForm({ title: selectedNote.title, content: selectedNote.content, tag: selectedNote.tag || '' });
+    setNoteEditorMode('view');
+    setError('');
   }
 
   function closeNotesPopup() {
@@ -1009,6 +1065,46 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {deletePrompt ? (
+        <div className="modal-overlay delete-confirm-overlay" role="presentation" onClick={closeDeletePrompt}>
+          <section className="modal-card delete-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">Confirm delete</p>
+                <h2 id="delete-confirm-title">{deletePrompt.title}</h2>
+              </div>
+              <button className="ghost-button" type="button" onClick={closeDeletePrompt} disabled={deleting}>
+                Close
+              </button>
+            </div>
+
+            <div className="modal-body delete-confirm-body">
+              <div className="delete-confirm-copy">
+                <p className="status-text">{deletePrompt.description}</p>
+              </div>
+
+              {deletePromptError ? <p className="error-text delete-confirm-error">{deletePromptError}</p> : null}
+
+              <div className="delete-confirm-actions">
+                <button className="ghost-button" type="button" onClick={closeDeletePrompt} disabled={deleting}>
+                  Cancel
+                </button>
+                <button className="danger-button delete-confirm-button" type="button" onClick={confirmDeletePrompt} disabled={deleting}>
+                  {deleting ? (
+                    <>
+                      <span className="button-spinner" aria-hidden="true" />
+                      Deleting...
+                    </>
+                  ) : (
+                    deletePrompt.confirmLabel
+                  )}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {examNotesPickerOpen ? (
         <div className="modal-overlay" role="presentation" onClick={closeExamNotesPicker}>
           <section
@@ -1377,6 +1473,7 @@ export default function App() {
                     onClick={() => {
                       setSelectedId(note.id);
                       setActiveScreen('notes');
+                      setNoteEditorMode('view');
                     }}
                   >
                     <strong>{note.title}</strong>
@@ -1395,83 +1492,108 @@ export default function App() {
         <section className="workspace">
           {activeScreen === 'all-notes' ? (
             <section className="editor-panel notes-archive-panel">
-              <div className="workspace-header notes-archive-header">
-                <button className="ghost-button" type="button" onClick={() => setActiveScreen('notes')}>
-                  Back
-                </button>
-                <div className="notes-archive-actions">
-                  {archiveBulkDeleteMode ? (
-                    <>
-                      <button className="ghost-button" type="button" onClick={deleteSelectedArchiveNotes} disabled={saving || selectedArchiveNotes.length === 0}>
-                        Selected ({selectedArchiveNotes.length})
-                      </button>
-                      <button className="ghost-button" type="button" onClick={toggleArchiveBulkDeleteMode}>
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <button className="ghost-button" type="button" onClick={toggleArchiveBulkDeleteMode}>
-                      Multiple
-                    </button>
-                  )}
-                  <button className="danger-button" type="button" onClick={deleteAllArchiveNotes} disabled={saving || notes.length === 0}>
-                    All
-                  </button>
+              <div className="notes-archive-topbar">
+                <div className="archive-search-float">
+                  <label className="archive-search">
+                    <input
+                      value={archiveSearchQuery}
+                      onChange={(event) => setArchiveSearchQuery(event.target.value)}
+                      placeholder="Search titles, content, and tags"
+                    />
+                  </label>
                 </div>
+
+                <button className="small-floating-button archive-manage-button" type="button" onClick={openArchiveManage} disabled={saving || notes.length === 0}>
+                  Manage
+                </button>
               </div>
 
               {loading ? (
                 <p className="status-text">Loading notes...</p>
               ) : notes.length === 0 ? (
                 <p className="status-text">No notes saved yet.</p>
+              ) : archiveVisibleNotes.length === 0 ? (
+                <p className="status-text">No notes match your search.</p>
               ) : (
                 <div className="notes-archive-list">
-                  {[...notes]
-                    .sort((noteA, noteB) => compareByUpdatedAt(noteA, noteB, sortOrder))
-                    .map((note) => (
-                      <div key={note.id} className={`notes-archive-row ${selectedNoteIds.includes(note.id) ? 'is-active' : ''}`}>
-                        {archiveBulkDeleteMode ? (
-                          <input
-                            className="notes-archive-check"
-                            type="checkbox"
-                            checked={selectedNoteIds.includes(note.id)}
-                            onChange={() => toggleArchiveNoteSelection(note.id)}
-                          />
-                        ) : (
-                          <span className="notes-archive-check-spacer" aria-hidden="true" />
-                        )}
-                        <button
-                          className="notes-archive-item"
-                          type="button"
-                          onClick={() => {
-                            if (archiveBulkDeleteMode) {
-                              toggleArchiveNoteSelection(note.id);
-                              return;
-                            }
-
-                            setSelectedId(note.id);
-                            setActiveScreen('notes');
-                          }}
-                        >
-                          <div className="notes-archive-item-header">
-                            <strong>{note.title}</strong>
-                            <span>{formatDate(note.updatedAt)}</span>
-                          </div>
-                          {note.tag ? <span className="note-tag">#{note.tag}</span> : null}
-                          <p>{note.content}</p>
-                        </button>
-                        <button
-                          className="ghost-button notes-archive-delete"
-                          type="button"
-                          onClick={() => deleteArchiveNote(note.id)}
-                          aria-label={`Delete ${note.title}`}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    ))}
+                  {archiveVisibleNotes.map((note) => (
+                    <div key={note.id} className={`notes-archive-row ${selectedNoteIds.includes(note.id) ? 'is-active' : ''}`}>
+                      <span className="notes-archive-check-spacer" aria-hidden="true" />
+                      <button
+                        className="notes-archive-item"
+                        type="button"
+                        onClick={() => {
+                          setSelectedId(note.id);
+                          setActiveScreen('notes');
+                          setNoteEditorMode('view');
+                        }}
+                      >
+                        <div className="notes-archive-item-header">
+                          <strong>{note.title}</strong>
+                          <span>{formatDate(note.updatedAt)}</span>
+                        </div>
+                        {note.tag ? <span className="note-tag">#{note.tag}</span> : null}
+                        <p>{note.content}</p>
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
+
+              {archiveManageOpen ? (
+                <div className="modal-overlay" role="presentation" onClick={closeArchiveManage}>
+                  <section className="modal-card archive-manage-modal" role="dialog" aria-modal="true" aria-labelledby="archive-manage-title" onClick={(event) => event.stopPropagation()}>
+                    <div className="modal-header">
+                      <div>
+                        <p className="eyebrow">Manage notes</p>
+                        <h2 id="archive-manage-title">Choose notes to delete</h2>
+                      </div>
+                      <button className="ghost-button" type="button" onClick={closeArchiveManage}>
+                        Close
+                      </button>
+                    </div>
+
+                    <div className="modal-body archive-manage-body">
+                      <div className="archive-manage-summary">
+                        <p className="status-text">
+                          {selectedNoteIds.length === 0
+                            ? `${notes.length} note(s) available.`
+                            : `${selectedNoteIds.length} selected for deletion.`}
+                        </p>
+                        <div className="archive-manage-actions">
+                          <button className="primary-button" type="button" onClick={deleteSelectedArchiveNotes} disabled={deleting || selectedNoteIds.length === 0}>
+                            Delete selected
+                          </button>
+                          <button className="danger-button" type="button" onClick={deleteAllArchiveNotes} disabled={deleting || notes.length === 0}>
+                            Delete all
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="archive-manage-list">
+                        {archiveVisibleNotes.length === 0 ? (
+                          <p className="status-text">No notes match your search.</p>
+                        ) : (
+                          archiveVisibleNotes.map((note) => (
+                            <label key={note.id} className={`archive-manage-item ${selectedNoteIds.includes(note.id) ? 'is-selected' : ''}`}>
+                              <input
+                                type="checkbox"
+                                checked={selectedNoteIds.includes(note.id)}
+                                onChange={() => toggleArchiveNoteSelection(note.id)}
+                              />
+                              <div>
+                                <strong>{note.title}</strong>
+                                {note.tag ? <span>#{note.tag}</span> : null}
+                                <span>{formatDate(note.updatedAt)}</span>
+                              </div>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              ) : null}
             </section>
           ) : activeScreen === 'notes' ? (
             <section className="editor-panel notes-workspace">
@@ -1483,54 +1605,83 @@ export default function App() {
                   Generate
                 </button>
               </div>
+              {selectedId === newNoteId || noteEditorMode === 'edit' ? (
+                <form className="editor-form" onSubmit={saveNote}>
+                  <div className="notes-editor-header">
+                    <div>
+                      <p className="eyebrow">{selectedId === newNoteId ? 'New note' : 'Editing note'}</p>
+                      <h3>{selectedId === newNoteId ? 'Create a note' : 'Edit the selected note'}</h3>
+                    </div>
+                    {selectedNote ? (
+                      <button className="ghost-button" type="button" onClick={cancelEditingSelectedNote}>
+                        Cancel
+                      </button>
+                    ) : null}
+                  </div>
 
-              <div className="notes-workspace-copy">
-                <p className="eyebrow">Notes workspace</p>
-                <h2>{selectedNote ? selectedNote.title : 'Select a note from the sidebar'}</h2>
-                <p className="subcopy">
-                  Use the fixed buttons in the top-right corner to add a note or generate new notes without taking space from the editor.
-                </p>
-              </div>
+                  <label>
+                    <span>Title</span>
+                    <input
+                      value={form.title}
+                      onChange={(event) => setForm((currentForm) => ({ ...currentForm, title: event.target.value }))}
+                      placeholder="Example: Weekly project plan"
+                      maxLength={120}
+                    />
+                  </label>
 
-              <form className="editor-form" onSubmit={saveNote}>
-                <label>
-                  <span>Title</span>
-                  <input
-                    value={form.title}
-                    onChange={(event) => setForm((currentForm) => ({ ...currentForm, title: event.target.value }))}
-                    placeholder="Example: Weekly project plan"
-                    maxLength={120}
-                  />
-                </label>
+                  <label>
+                    <span>Tag</span>
+                    <input
+                      value={form.tag}
+                      onChange={(event) => setForm((currentForm) => ({ ...currentForm, tag: event.target.value }))}
+                      placeholder="Example: planning"
+                      maxLength={40}
+                    />
+                  </label>
 
-                <label>
-                  <span>Tag</span>
-                  <input
-                    value={form.tag}
-                    onChange={(event) => setForm((currentForm) => ({ ...currentForm, tag: event.target.value }))}
-                    placeholder="Example: planning"
-                    maxLength={40}
-                  />
-                </label>
+                  <label>
+                    <span>Content</span>
+                    <textarea
+                      value={form.content}
+                      onChange={(event) => setForm((currentForm) => ({ ...currentForm, content: event.target.value }))}
+                      placeholder="Capture the important details here..."
+                      rows={12}
+                      maxLength={5000}
+                    />
+                  </label>
 
-                <label>
-                  <span>Content</span>
-                  <textarea
-                    value={form.content}
-                    onChange={(event) => setForm((currentForm) => ({ ...currentForm, content: event.target.value }))}
-                    placeholder="Capture the important details here..."
-                    rows={12}
-                    maxLength={5000}
-                  />
-                </label>
+                  <div className="form-footer">
+                    <p className="status-text">{message || 'Save changes to this notebook.'}</p>
+                    <button className="primary-button" type="submit" disabled={saving}>
+                      {saving ? 'Saving...' : selectedNote ? 'Update note' : 'Save note'}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <section className="notes-view-card">
+                  <div className="notes-view-header">
+                    <div>
+                      <p className="eyebrow">Selected note</p>
+                      <h3>{selectedNote?.title || 'No note selected'}</h3>
+                    </div>
+                    {selectedNote ? (
+                      <button className="primary-button" type="button" onClick={startEditingSelectedNote}>
+                        Edit
+                      </button>
+                    ) : null}
+                  </div>
 
-                <div className="form-footer">
-                  <p className="status-text">{message || 'Save changes to this notebook.'}</p>
-                  <button className="primary-button" type="submit" disabled={saving}>
-                    {saving ? 'Saving...' : selectedNote ? 'Update note' : 'Save note'}
-                  </button>
-                </div>
-              </form>
+                  {selectedNote ? (
+                    <div className="notes-view-body">
+                      {selectedNote.tag ? <span className="note-tag">#{selectedNote.tag}</span> : null}
+                      <span className="notes-view-meta">Updated {formatDate(selectedNote.updatedAt)}</span>
+                      <p>{selectedNote.content}</p>
+                    </div>
+                  ) : (
+                    <p className="status-text">Pick a note from the sidebar, or start a new one with the + button.</p>
+                  )}
+                </section>
+              )}
 
               {error ? <p className="error-text">{error}</p> : null}
             </section>
@@ -1547,13 +1698,6 @@ export default function App() {
                   Prompt
                 </button>
               </div>
-
-              <div className="exam-workspace-copy">
-                <p className="eyebrow">Mock exam builder</p>
-                <h2>Generate mock exam with Groq</h2>
-                <p className="subcopy">Use the floating buttons to build an exam from saved notes, a shared tag, or freeform code snippets.</p>
-              </div>
-
               <section className="exam-lms-layout">
                 <aside className="exam-list-card">
                   <h3>Saved mock exams</h3>
@@ -1578,6 +1722,7 @@ export default function App() {
                             type="button"
                             className="ghost-button exam-list-delete"
                             onClick={() => deleteMockExam(exam.id)}
+                            disabled={deleting}
                             aria-label={`Delete ${exam.title}`}
                           >
                             Delete
