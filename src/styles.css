@@ -382,6 +382,10 @@ button {
   margin-bottom: 0;
 }
 
+.exam-freeform-generator textarea {
+  min-height: 260px;
+}
+
 .notes-popup-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -820,6 +824,31 @@ button {
 .exam-result {
   display: grid;
   gap: 8px;
+}
+
+.exam-attempt-history {
+  display: grid;
+  gap: 8px;
+}
+
+.exam-attempt-history-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.exam-attempt-list {
+  display: grid;
+  gap: 8px;
+}
+
+.exam-attempt-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .exam-breakdown {

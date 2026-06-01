@@ -94,10 +94,16 @@ export default function App() {
   const [examResult, setExamResult] = useState(null);
   const [examGeneratorOpen, setExamGeneratorOpen] = useState(false);
   const [examNotesPickerOpen, setExamNotesPickerOpen] = useState(false);
+  const [examFreeformOpen, setExamFreeformOpen] = useState(false);
   const [selectedExamSourceNoteIds, setSelectedExamSourceNoteIds] = useState([]);
   const [examNotesQuery, setExamNotesQuery] = useState('');
   const [examQuestionCount, setExamQuestionCount] = useState(12);
   const [selectedNotesQuestionCount, setSelectedNotesQuestionCount] = useState(12);
+  const [freeformExamPrompt, setFreeformExamPrompt] = useState('');
+  const [freeformExamTag, setFreeformExamTag] = useState('');
+  const [freeformExamQuestionCount, setFreeformExamQuestionCount] = useState(12);
+  const [examAttempts, setExamAttempts] = useState([]);
+  const [examAttemptsLoading, setExamAttemptsLoading] = useState(false);
 
   const visibleNotes = useMemo(
     () => getVisibleNotes(notes, showUniqueTitles, sortOrder),
@@ -557,6 +563,63 @@ export default function App() {
     }
   }
 
+  async function generateMockExamFromPrompt(event) {
+    event.preventDefault();
+
+    const prompt = freeformExamPrompt.trim();
+    const tag = freeformExamTag.trim();
+    const questionCount = Math.max(5, Math.min(30, Number.parseInt(String(freeformExamQuestionCount), 10) || 12));
+
+    if (!prompt) {
+      setExamError('Enter study material or code snippets to generate from.');
+      return;
+    }
+
+    setExamLoading(true);
+    setExamError('');
+    setExamResult(null);
+
+    try {
+      const response = await fetch('/api/ai/mock-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ prompt, tag, questionCount }),
+      });
+
+      if (response.status === 401) {
+        setSession(null);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, 'Unable to generate mock exam from prompt.'));
+      }
+
+      const data = await response.json();
+      const nextExam = data.exam || null;
+
+      if (!nextExam) {
+        throw new Error('Unable to read generated exam.');
+      }
+
+      setExamList((currentExams) => {
+        const deduped = currentExams.filter((exam) => exam.id !== nextExam.id);
+        return [nextExam, ...deduped];
+      });
+      setSelectedExamId(nextExam.id);
+      setExamAnswers({});
+      setExamFreeformOpen(false);
+      setFreeformExamPrompt('');
+    } catch (requestError) {
+      setExamError(requestError.message || 'Unable to generate mock exam from prompt.');
+    } finally {
+      setExamLoading(false);
+    }
+  }
+
   async function generateMockExamFromSelectedNotes(event) {
     event.preventDefault();
 
@@ -693,6 +756,40 @@ export default function App() {
     }
   }, [selectedExam]);
 
+  useEffect(() => {
+    if (!selectedExam) {
+      setExamAttempts([]);
+      return;
+    }
+
+    async function loadExamAttempts() {
+      setExamAttemptsLoading(true);
+
+      try {
+        const response = await fetch(`/api/mock-exams/${selectedExam.id}/attempts`, { credentials: 'include' });
+
+        if (response.status === 401) {
+          setSession(null);
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response, 'Unable to load previous attempts.'));
+        }
+
+        const data = await response.json();
+        setExamAttempts(data.attempts || []);
+      } catch (requestError) {
+        setExamError(requestError.message || 'Unable to load previous attempts.');
+        setExamAttempts([]);
+      } finally {
+        setExamAttemptsLoading(false);
+      }
+    }
+
+    loadExamAttempts();
+  }, [selectedExam]);
+
   function selectExamAnswer(questionId, answerIndex) {
     setExamAnswers((currentAnswers) => ({
       ...currentAnswers,
@@ -746,6 +843,20 @@ export default function App() {
 
       const data = await response.json();
       setExamResult(data);
+      setExamAttempts((currentAttempts) => [
+        {
+          id: data.attemptId,
+          examId: selectedExam.id,
+          examTitle: selectedExam.title,
+          examTag: selectedExam.tag || '',
+          score: data.score,
+          total: data.total,
+          answeredCount: data.answeredCount,
+          percentage: data.percentage,
+          submittedAt: data.submittedAt,
+        },
+        ...currentAttempts,
+      ]);
     } catch (requestError) {
       setExamError(requestError.message || 'Unable to submit exam attempt.');
     } finally {
@@ -784,6 +895,15 @@ export default function App() {
 
   function closeGenerateExamPopup() {
     setExamGeneratorOpen(false);
+  }
+
+  function openFreeformExamPopup() {
+    setExamFreeformOpen(true);
+    setExamError('');
+  }
+
+  function closeFreeformExamPopup() {
+    setExamFreeformOpen(false);
   }
 
   function openExamNotesPicker() {
@@ -1016,6 +1136,78 @@ export default function App() {
 
                 <div className="ai-generator-footer">
                   <p className="status-text">{examError || 'Uses all notes that share the tag to build one exam.'}</p>
+                  <button className="primary-button" type="submit" disabled={examLoading}>
+                    {examLoading ? 'Generating...' : 'Generate mock exam'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {examFreeformOpen ? (
+        <div className="modal-overlay" role="presentation" onClick={closeFreeformExamPopup}>
+          <section
+            className="modal-card notes-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="exam-freeform-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">Mock exam builder</p>
+                <h2 id="exam-freeform-title">Generate from prompt or code snippet</h2>
+              </div>
+              <button className="ghost-button" type="button" onClick={closeFreeformExamPopup}>
+                Close
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <form className="ai-generator exam-popup-generator exam-freeform-generator" onSubmit={generateMockExamFromPrompt}>
+                <div className="ai-generator-heading">
+                  <h2>Generate mock exam from custom material</h2>
+                  <p>Paste code, an outline, or any study notes and Groq will build an exam without needing saved notes.</p>
+                </div>
+
+                <label>
+                  <span>Study material or code snippet</span>
+                  <textarea
+                    value={freeformExamPrompt}
+                    onChange={(event) => setFreeformExamPrompt(event.target.value)}
+                    placeholder={"Example:\nfunction sum(a, b) {\n  return a + b;\n}\n\nCreate an exam on closures, scope, and runtime behavior."}
+                    rows={12}
+                    maxLength={12000}
+                  />
+                </label>
+
+                <div className="ai-generator-grid">
+                  <label>
+                    <span>Tag</span>
+                    <input
+                      value={freeformExamTag}
+                      onChange={(event) => setFreeformExamTag(event.target.value)}
+                      placeholder="Example: javascript"
+                      maxLength={40}
+                    />
+                  </label>
+
+                  <label>
+                    <span>Number of questions</span>
+                    <input
+                      type="number"
+                      min={5}
+                      max={30}
+                      value={freeformExamQuestionCount}
+                      onChange={(event) => setFreeformExamQuestionCount(event.target.value)}
+                    />
+                  </label>
+                </div>
+
+                <div className="ai-generator-footer">
+                  <p className="status-text">{examError || 'Best for code snippets, study outlines, or any topic you want turned into a quiz.'}</p>
                   <button className="primary-button" type="submit" disabled={examLoading}>
                     {examLoading ? 'Generating...' : 'Generate mock exam'}
                   </button>
@@ -1351,12 +1543,15 @@ export default function App() {
                 <button className="small-floating-button" type="button" onClick={openGenerateExamPopup}>
                   Generate
                 </button>
+                <button className="small-floating-button" type="button" onClick={openFreeformExamPopup}>
+                  Prompt
+                </button>
               </div>
 
               <div className="exam-workspace-copy">
                 <p className="eyebrow">Mock exam builder</p>
                 <h2>Generate mock exam with Groq</h2>
-                <p className="subcopy">Open the floating button to build an exam from notes that share a tag.</p>
+                <p className="subcopy">Use the floating buttons to build an exam from saved notes, a shared tag, or freeform code snippets.</p>
               </div>
 
               <section className="exam-lms-layout">
@@ -1459,6 +1654,35 @@ export default function App() {
                           </div>
                         </section>
                       ) : null}
+
+                      <section className="exam-attempt-history">
+                        <div className="exam-attempt-history-header">
+                          <h4>Previous attempts</h4>
+                          <span className="status-text">
+                            {examAttemptsLoading ? 'Loading...' : `${examAttempts.length} saved`}
+                          </span>
+                        </div>
+
+                        {examAttemptsLoading ? (
+                          <p className="status-text">Loading previous attempts...</p>
+                        ) : examAttempts.length === 0 ? (
+                          <p className="status-text">No previous attempts yet.</p>
+                        ) : (
+                          <div className="exam-attempt-list">
+                            {examAttempts.map((attempt, attemptIndex) => (
+                              <article key={attempt.id} className="exam-attempt-item">
+                                <strong>
+                                  Attempt {attemptIndex + 1}: {attempt.score}/{attempt.total} ({attempt.percentage}%)
+                                </strong>
+                                <span>
+                                  Answered {attempt.answeredCount} of {attempt.total}
+                                </span>
+                                <span>{formatDate(attempt.submittedAt)}</span>
+                              </article>
+                            ))}
+                          </div>
+                        )}
+                      </section>
                     </form>
                   ) : (
                     <p className="status-text">Generate or select a mock exam to begin.</p>

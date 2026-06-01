@@ -29,5 +29,7 @@ export default async function handler(req, res) {
     return;
   }
 
+  await db.collection('mock_exam_attempts').deleteMany({ examId: new ObjectId(examId) });
+
   res.status(204).end();
 }

@@ -73,7 +73,7 @@ function normalizeGeneratedExam(rawExam, fallbackTag, requestedQuestionCount) {
   return {
     title,
     instructions,
-    tag: fallbackTag,
+    tag: fallbackTag || 'freeform',
     timeLimitMinutes,
     questions: questions.slice(0, requestedQuestionCount),
   };
@@ -102,7 +102,7 @@ function serializeMockExam(exam) {
   };
 }
 
-async function callGroqForExam(tag, notes, questionCount, sourceMode = 'tag') {
+async function callGroqForExam({ tag, notes = [], questionCount, sourceMode = 'tag', sourceText = '' }) {
   const apiKey = process.env.GROQ_API_KEY;
   const model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 
@@ -111,6 +111,7 @@ async function callGroqForExam(tag, notes, questionCount, sourceMode = 'tag') {
   }
 
   const noteContext = notes.slice(0, 25).map(serializeForPrompt).join('\n\n---\n\n');
+  const freeformSource = String(sourceText || '').trim();
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -125,20 +126,24 @@ async function callGroqForExam(tag, notes, questionCount, sourceMode = 'tag') {
         {
           role: 'system',
           content:
-            'You create mock exams from study notes. Return only valid JSON with this exact shape: {"title":"...","instructions":"...","timeLimitMinutes":45,"questions":[{"prompt":"...","options":["...","...","...","..."],"correctIndex":0,"explanation":"..."}]}. Do not use markdown fences or extra text.',
+            'You create mock exams from study notes or freeform study material. Return only valid JSON with this exact shape: {"title":"...","instructions":"...","timeLimitMinutes":45,"questions":[{"prompt":"...","options":["...","...","...","..."],"correctIndex":0,"explanation":"..."}]}. Do not use markdown fences or extra text.',
         },
         {
           role: 'user',
           content: [
             sourceMode === 'selection'
               ? 'Build a mock exam from these explicitly selected notes.'
-              : `Build a mock exam using notes with tag: ${tag}.`,
+              : sourceMode === 'prompt'
+                ? 'Build a mock exam from the freeform study material below. The source may include code snippets, algorithms, API notes, or mixed study text.'
+                : `Build a mock exam using notes with tag: ${tag}.`,
             `Create ${questionCount} multiple-choice questions with 4 options each.`,
-            'Keep questions aligned with the provided note content only.',
+            sourceMode === 'prompt'
+              ? 'Keep questions aligned with the provided source material only and do not require any database notes.'
+              : 'Keep questions aligned with the provided note content only.',
             'Provide concise explanations for the correct answers.',
             '',
-            'NOTES:',
-            noteContext,
+            sourceMode === 'prompt' ? 'SOURCE MATERIAL:' : 'NOTES:',
+            sourceMode === 'prompt' ? freeformSource : noteContext,
           ].join('\n'),
         },
       ],
@@ -168,6 +173,7 @@ export default async function handler(req, res) {
   }
 
   const tag = String(req.body?.tag || '').trim();
+  const prompt = String(req.body?.prompt || req.body?.sourceText || '').trim();
   const requestedQuestionCount = Number.parseInt(String(req.body?.questionCount ?? '12'), 10);
   const questionCount = Math.max(5, Math.min(30, Number.isNaN(requestedQuestionCount) ? 12 : requestedQuestionCount));
   const selectedNoteIds = Array.isArray(req.body?.noteIds)
@@ -175,9 +181,15 @@ export default async function handler(req, res) {
     : [];
 
   const hasSelectedNotes = selectedNoteIds.length > 0;
+  const hasPromptSource = Boolean(prompt);
 
-  if (!hasSelectedNotes && !tag) {
-    res.status(400).json({ error: 'Tag is required.' });
+  if (!hasSelectedNotes && !tag && !hasPromptSource) {
+    res.status(400).json({ error: 'Tag or prompt text is required.' });
+    return;
+  }
+
+  if (hasPromptSource && hasSelectedNotes) {
+    res.status(400).json({ error: 'Use either selected notes or a freeform prompt, not both.' });
     return;
   }
 
@@ -206,7 +218,7 @@ export default async function handler(req, res) {
       .toArray();
   }
 
-  if (notes.length === 0) {
+  if (!hasPromptSource && notes.length === 0) {
     if (hasSelectedNotes) {
       res.status(404).json({ error: 'No selected notes were found.' });
     } else {
@@ -217,10 +229,18 @@ export default async function handler(req, res) {
 
   const resolvedTag = hasSelectedNotes
     ? (notes.length === 1 && notes[0]?.tag ? String(notes[0].tag).trim() : 'selected-notes')
-    : tag;
+    : hasPromptSource
+      ? tag || 'freeform'
+      : tag;
 
   try {
-    const generatedExam = await callGroqForExam(resolvedTag, notes, questionCount, hasSelectedNotes ? 'selection' : 'tag');
+    const generatedExam = await callGroqForExam({
+      tag: resolvedTag,
+      notes,
+      questionCount,
+      sourceMode: hasSelectedNotes ? 'selection' : hasPromptSource ? 'prompt' : 'tag',
+      sourceText: prompt,
+    });
 
     if (!generatedExam.questions.length) {
       res.status(502).json({ error: 'Groq returned an invalid exam structure.' });
@@ -236,7 +256,7 @@ export default async function handler(req, res) {
       instructions: generatedExam.instructions,
       timeLimitMinutes: generatedExam.timeLimitMinutes,
       questions: generatedExam.questions,
-      sourceNoteCount: notes.length,
+      sourceNoteCount: hasPromptSource ? 0 : notes.length,
       createdAt: now,
       updatedAt: now,
     });
